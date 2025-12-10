@@ -5,31 +5,34 @@ import textwrap
 import os
 import re
 
+try:
+    from .utils import (
+        cast_struct_value,
+        extract_braced_value,
+        format_array_init,
+        generate_static_definition,
+        get_base_type,
+        get_read_func,
+        get_type_size,
+        get_write_func,
+        map_access,
+        map_type,
+    )
+except ImportError:  # pragma: no cover - fallback when running as a script
+    from utils import (  # type: ignore
+        cast_struct_value,
+        extract_braced_value,
+        format_array_init,
+        generate_static_definition,
+        get_base_type,
+        get_read_func,
+        get_type_size,
+        get_write_func,
+        map_access,
+        map_type,
+    )
+
 BASE_FRAM_OFFSET = 0x0002
-
-def format_value_for_init(var_type: str, value: str) -> str:
-    try:
-        if value.strip() == "":
-            value = "0"
-        if var_type == "float":
-            fval = float(value)
-            return f"{int(fval)}.0f" if fval.is_integer() else f"{fval}f"
-        elif var_type == "uint16_t":
-            return f"{int(value)}U"
-        elif var_type == "uint32_t":
-            return f"{int(value)}UL"
-        else:
-            return value
-    except Exception:
-        return "0"
-
-def generate_static_definition(var_type: str, var_name: str, count: int, default_str: str) -> str:
-    init_val = format_value_for_init(var_type, default_str)
-    if count == 1:
-        return f"static {var_type} {var_name} = {init_val};"
-    else:
-        init_list = ", ".join([init_val] * count)
-        return f"static {var_type} {var_name}[{count}] = {{{init_list}}};"
 
 def main():
     root = tk.Tk()
@@ -77,39 +80,6 @@ def main():
     entries = []
     fram_offset = BASE_FRAM_OFFSET
 
-    def get_type_size(var_type_str):
-        if var_type_str == "uint16_t":
-            return 2
-        elif var_type_str in ("uint32_t", "float"):
-            return 4
-        else:
-            return 2  # fallback
-
-    def map_type(var_type, is_array):
-        if var_type == "uint16_t":
-            return "REG_TYPE_UINT16_ARRAY" if is_array else "REG_TYPE_UINT16"
-        elif var_type == "uint32_t":
-            return "REG_TYPE_UINT32_ARRAY" if is_array else "REG_TYPE_UINT32"
-        elif var_type == "float":
-            return "REG_TYPE_FLOAT_ARRAY" if is_array else "REG_TYPE_FLOAT"
-        else:
-            return "REG_TYPE_UINT16"
-
-    def map_access(access_str):
-        s = access_str.strip().upper()
-        if s == "R":
-            return "ACCESS_READ"
-        elif s == "W":
-            return "ACCESS_WRITE"
-        elif s == "RW":
-            return "ACCESS_READWRITE"
-        else:
-            return "ACCESS_READWRITE"
-        
-    def format_array_init(var_type, value, count):
-        val_str = format_value_for_init(var_type, value)
-        return ", ".join([val_str] * count)
-
     for i in range(header_row_index + 1, len(reg_table_df)):
         row = reg_table_df.iloc[i]
         if str(row[1]).strip().upper() == "EOF":
@@ -133,31 +103,10 @@ def main():
                 continue
             count = length_defs[array_len]
 
-        size_expr = f"sizeof({var_type}) * {array_len}" if is_array else f"sizeof({var_type})" 
+        size_expr = f"sizeof({var_type}) * {array_len}" if is_array else f"sizeof({var_type})"
         vdef_str = str(vdef).strip() if pd.notna(vdef) else "0"
-        ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)       
+        ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)
         ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
-
-        def format_value(value):
-            if var_type == "float":
-                try:
-                    fval = float(value)
-                    return f"{int(fval)}.0f" if fval.is_integer() else f"{fval}f"
-                except ValueError:
-                    return "0.0f"
-            else:
-                return str(value)
-
-        def cast_value(value, kind):
-            # これを追加：空白セルを正しく判定するために str(value) による空文字確認を厳密にする
-            if var_type == "float":
-                if kind == "min" and (value is None or str(value).strip() == ""):
-                    return "&(float){-3.4e+38f}"
-                if kind == "max" and (value is None or str(value).strip() == ""):
-                    return "&(float){3.4e+38f}"
-
-            # 通常の処理：値が有効な場合の整形
-            return f"&({var_type}){{{format_value(value)}}}"
 
         if str(fram_flag).strip().upper() == "TRUE":
             total_bytes = get_type_size(var_type) * count
@@ -176,9 +125,9 @@ def main():
             "modbus_addr": int(reg_addr),
             "fram_offset": current_offset,
             "size": size_expr,
-            "default_value": cast_value(vdef, "default"),
-            "min_value": cast_value(vmin, "min"),
-            "max_value": cast_value(vmax, "max"),
+            "default_value": cast_struct_value(var_type, vdef, "default"),
+            "min_value": cast_struct_value(var_type, vmin, "min"),
+            "max_value": cast_struct_value(var_type, vmax, "max"),
             "ram_ptr": ram_ptr,
             "ram_decl": ram_decl,
             "type": map_type(var_type, is_array),
@@ -419,39 +368,6 @@ def main():
     access_c_lines.extend([
         '/* Access function implementations */'
     ])    
-
-    def get_base_type(entry_type):
-        if "UINT16" in entry_type:
-            return "uint16_t"
-        elif "UINT32" in entry_type:
-            return "uint32_t"
-        elif "FLOAT" in entry_type:
-            return "float"
-        else:
-            return "uint16_t"  # fallback
-        
-    def is_float_type(entry_type):
-        return "FLOAT" in entry_type
-
-    def get_read_func(entry_type):
-        if "UINT16" in entry_type:
-            return "read_uint16"
-        elif "UINT32" in entry_type:
-            return "read_uint32"
-        elif "FLOAT" in entry_type:
-            return "read_float"
-        else:
-            return "read_uint16"
-
-    def get_write_func(entry_type):
-        if "UINT16" in entry_type:
-            return "write_uint16"
-        elif "UINT32" in entry_type:
-            return "write_uint32"
-        elif "FLOAT" in entry_type:
-            return "write_float"
-        else:
-            return "write_uint16"
 
     for idx, entry in enumerate(entries):
         name = entry["name"]
