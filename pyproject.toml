@@ -34,7 +34,10 @@ msrg = "modbus_slave_regmap_generator.main:main"
 Homepage = "https://github.com/prevalmam/modbus-slave-regmap-generator"
 
 [tool.setuptools]
-packages = ["modbus_slave_regmap_generator"]
+packages = [
+	"modbus_slave_regmap_generator",
+	"modbus_slave_regmap_generator.generators"
+]
 [tool.setuptools.package-dir]
 modbus_slave_regmap_generator = "src/modbus_slave_regmap_generator"
 
