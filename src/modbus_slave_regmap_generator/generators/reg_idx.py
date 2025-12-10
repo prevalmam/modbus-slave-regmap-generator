@@ -10,8 +10,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     entries = workbook.entries
 
     idx_lines = [
-        "#ifndef MODBUS_REG_IDX_H",
-        "#define MODBUS_REG_IDX_H",
+        "#ifndef MODBUS_REG_IDX_SLAVE_H",
+        "#define MODBUS_REG_IDX_SLAVE_H",
         "",
         "#define MODBUS_SLAVE_ADDR 0x01",
         "",
@@ -23,16 +23,16 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         base_name = entry["name"]
         length = entry["length"]
 
-        # Base index for g_reg_table
+        # Base index for g_reg_table_slave
         idx_lines.append(f"#define MODBUS_IDX_{base_name}  ({idx})")
 
         if length > 1:
             for i in range(length):
                 idx_lines.append(f"#define MODBUS_IDX_{base_name}_{i}  ({i})")
 
-        idx += 1  # advance g_reg_table index by one entry
+        idx += 1  # advance g_reg_table_slave index by one entry
 
     idx_lines.append("")
     idx_lines.append("#endif")
 
-    return [GeneratedFile("modbus_reg_idx.h", "\n".join(idx_lines))]
+    return [GeneratedFile("modbus_reg_idx_slave.h", "\n".join(idx_lines))]

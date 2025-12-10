@@ -11,9 +11,9 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     entries = workbook.entries
 
     edge_c_lines = [
-        '#include "modbus_reg_access.h"',
-        '#include "modbus_reg_idx.h"',
-        '#include "modbus_reg_edge.h"',
+        '#include "modbus_reg_access_slave.h"',
+        '#include "modbus_reg_idx_slave.h"',
+        '#include "modbus_reg_edge_slave.h"',
         "",
     ]
 
@@ -34,8 +34,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     edge_c_lines.append("/* Edge detection functions */")
 
     edge_h_lines = [
-        "#ifndef MODBUS_REG_EDGE_H",
-        "#define MODBUS_REG_EDGE_H",
+        "#ifndef MODBUS_REG_EDGE_SLAVE_H",
+        "#define MODBUS_REG_EDGE_SLAVE_H",
         "",
         "#include <stdint.h>",
         "",
@@ -196,8 +196,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     edge_h_lines.append("#endif")
 
     return [
-        GeneratedFile("modbus_reg_edge.c", "\n".join(edge_c_lines)),
-        GeneratedFile("modbus_reg_edge.h", "\n".join(edge_h_lines)),
+        GeneratedFile("modbus_reg_edge_slave.c", "\n".join(edge_c_lines)),
+        GeneratedFile("modbus_reg_edge_slave.h", "\n".join(edge_h_lines)),
     ]
 
 

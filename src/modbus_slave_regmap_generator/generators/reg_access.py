@@ -16,8 +16,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     used_types = _collect_used_types(entries)
 
     access_lines = [
-        "#ifndef MODBUS_REG_ACCESS_H",
-        "#define MODBUS_REG_ACCESS_H",
+        "#ifndef MODBUS_REG_ACCESS_SLAVE_H",
+        "#define MODBUS_REG_ACCESS_SLAVE_H",
         "",
         "#include <stdint.h>",
         "",
@@ -48,9 +48,9 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     access_lines.append("#endif")
 
     access_c_lines = [
-        '#include "modbus_reg_access.h"',
-        '#include "modbus_reg_map.h"',
-        '#include "modbus_reg_idx.h"',
+        '#include "modbus_reg_access_slave.h"',
+        '#include "modbus_reg_map_slave.h"',
+        '#include "modbus_reg_idx_slave.h"',
         "",
         "/* Access function implementations */",
         "",
@@ -89,7 +89,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         is_array = entry["length"] > 1
 
         idx_macro = f"MODBUS_IDX_{name}"
-        entry_ref = f"g_reg_table[{idx_macro}]"
+        entry_ref = f"g_reg_table_slave[{idx_macro}]"
 
         if is_array:
             access_c_lines.append(f"{base_type} get_{name}(uint16_t index)")
@@ -153,6 +153,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("")
 
     return [
-        GeneratedFile("modbus_reg_access.h", "\n".join(access_lines)),
-        GeneratedFile("modbus_reg_access.c", "\n".join(access_c_lines)),
+        GeneratedFile("modbus_reg_access_slave.h", "\n".join(access_lines)),
+        GeneratedFile("modbus_reg_access_slave.c", "\n".join(access_c_lines)),
     ]

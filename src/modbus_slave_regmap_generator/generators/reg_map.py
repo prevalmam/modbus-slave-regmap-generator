@@ -16,8 +16,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
     h_text = textwrap.dedent(
         """\
-        #ifndef MODBUS_REG_MAP_H
-        #define MODBUS_REG_MAP_H
+        #ifndef MODBUS_REG_MAP_SLAVE_H
+        #define MODBUS_REG_MAP_SLAVE_H
 
         #include <stdint.h>
 
@@ -72,14 +72,14 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         """\
         } reg_table_entry_t;
 
-        extern const reg_table_entry_t g_reg_table[];
-        extern const uint16_t g_reg_table_size;
+        extern const reg_table_entry_t g_reg_table_slave[];
+        extern const uint16_t g_reg_table_slave_size;
 
         #endif
     """
     )
 
-    c_text = '#include "modbus_reg_map.h"\n\n'
+    c_text = '#include "modbus_reg_map_slave.h"\n\n'
     for entry in entries:
         c_text += f"{entry['ram_decl']}\n"
 
@@ -98,7 +98,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += f"const {value_type} min_{entry['name']}[{count}] = {{{min_val}}};\n"
         c_text += f"const {value_type} max_{entry['name']}[{count}] = {{{max_val}}};\n"
 
-    c_text += "\nconst reg_table_entry_t g_reg_table[] = {\n"
+    c_text += "\nconst reg_table_entry_t g_reg_table_slave[] = {\n"
     for entry in entries:
         c_text += "    {\n"
         c_text += f"        \"{entry['name']}\",\n"
@@ -122,11 +122,11 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += "    },\n"
     c_text += "};\n\n"
     c_text += (
-        "const uint16_t g_reg_table_size = "
-        "(uint16_t)(sizeof(g_reg_table) / sizeof(g_reg_table[0]));\n"
+        "const uint16_t g_reg_table_slave_size = "
+        "(uint16_t)(sizeof(g_reg_table_slave) / sizeof(g_reg_table_slave[0]));\n"
     )
 
     return [
-        GeneratedFile("modbus_reg_map.h", h_text),
-        GeneratedFile("modbus_reg_map.c", c_text),
+        GeneratedFile("modbus_reg_map_slave.h", h_text),
+        GeneratedFile("modbus_reg_map_slave.c", c_text),
     ]
