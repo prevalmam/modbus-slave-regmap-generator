@@ -227,14 +227,20 @@ def _emit_edge_init_block(entries) -> str:
             code_lines.append("    {")
             code_lines.append(f"        (void)detect_{name}_changed(i);")
             code_lines.append("    }")
-            code_lines.append(f"    (void)detect_{name}_any_changed();")
+            code_lines.append(f"    for (i = 0; i < {length}U; ++i)")
+            code_lines.append("    {")
+            code_lines.append(f"        (void)detect_{name}_any_changed();")
+            code_lines.append("    }")
         elif entry_type in ("REG_TYPE_UINT16_ARRAY", "REG_TYPE_UINT32_ARRAY"):
             for kind in ("rising", "falling", "toggled"):
                 code_lines.append(f"    for (i = 0; i < {length}U; ++i)")
                 code_lines.append("    {")
                 code_lines.append(f"        (void)detect_{name}_{kind}_edge(i, 0xFFFF);")
                 code_lines.append("    }")
-            code_lines.append(f"    (void)detect_{name}_any_changed();")
+            code_lines.append(f"    for (i = 0; i < {length}U; ++i)")
+            code_lines.append("    {")
+            code_lines.append(f"        (void)detect_{name}_any_changed();")
+            code_lines.append("    }")
 
     code_lines.append("}")
     return "\n".join(code_lines)
