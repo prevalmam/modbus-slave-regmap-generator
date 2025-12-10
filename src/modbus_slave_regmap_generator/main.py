@@ -1,36 +1,26 @@
-import pandas as pd
 import tkinter as tk
 from tkinter import filedialog
 import textwrap
 import os
-import re
 
 try:
     from .utils import (
-        cast_struct_value,
         extract_braced_value,
         format_array_init,
-        generate_static_definition,
         get_base_type,
         get_read_func,
-        get_type_size,
         get_write_func,
-        map_access,
-        map_type,
     )
+    from .workbook_loader import load_workbook_data
 except ImportError:  # pragma: no cover - fallback when running as a script
     from utils import (  # type: ignore
-        cast_struct_value,
         extract_braced_value,
         format_array_init,
-        generate_static_definition,
         get_base_type,
         get_read_func,
-        get_type_size,
         get_write_func,
-        map_access,
-        map_type,
     )
+    from workbook_loader import load_workbook_data  # type: ignore
 
 BASE_FRAM_OFFSET = 0x0002
 
@@ -39,104 +29,13 @@ def main():
     root.withdraw()
     file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
     if not file_path:
-        print("キャンセルされました")
+        print("繧ｭ繝｣繝ｳ繧ｻ繝ｫ縺輔ｌ縺ｾ縺励◆")
         return
 
-    reg_table_df = pd.read_excel(file_path, sheet_name="RegisterTable", header=None)
-    lengthdefs_df = pd.read_excel(file_path, sheet_name="LengthDefs", header=None)
-    config_df = pd.read_excel(file_path, sheet_name="Config", header=None)
-
-    fram_total_size = int(config_df.iloc[4, 3])
-    fram_offset_unused = fram_total_size
-
-    length_defs = {}
-    for _, row in lengthdefs_df.iterrows():
-        if str(row[1]).strip().upper() == "EOF":
-            break
-        macro = row[2]
-        value = row[3]
-        if pd.notna(macro) and pd.notna(value):
-            try:
-                length_defs[str(macro).strip()] = int(value)
-            except ValueError:
-                continue
-
-    for i, row in reg_table_df.iterrows():
-        if str(row[2]) == "Reg_Addr":
-            header_row_index = i
-            header_row = reg_table_df.iloc[i]
-
-            # BR_列を検出する
-            import re
-            br_cols = {}
-            for idx, col_name in enumerate(header_row):
-                if isinstance(col_name, str) and col_name.startswith("BR_"):
-                    key = col_name[3:]
-                    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', key):
-                        raise ValueError(f"Invalid BR_ column name: '{col_name}' is not a valid C identifier")
-                    br_cols[key] = idx
-            break
-
-    entries = []
-    fram_offset = BASE_FRAM_OFFSET
-
-    for i in range(header_row_index + 1, len(reg_table_df)):
-        row = reg_table_df.iloc[i]
-        if str(row[1]).strip().upper() == "EOF":
-            break
-        columns = row[2:11]
-        if columns.isnull().any():
-            continue
-
-        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef, fram_flag = columns
-        var_name = str(var_name).strip()
-        var_type = str(var_type).strip()
-        array_len = str(array_len).strip()
-        access = str(access).strip()
-
-        is_array = True
-        try:
-            count = int(array_len)
-            is_array = False
-        except ValueError:
-            if array_len not in length_defs:
-                continue
-            count = length_defs[array_len]
-
-        size_expr = f"sizeof({var_type}) * {array_len}" if is_array else f"sizeof({var_type})"
-        vdef_str = str(vdef).strip() if pd.notna(vdef) else "0"
-        ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)
-        ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
-
-        if str(fram_flag).strip().upper() == "TRUE":
-            total_bytes = get_type_size(var_type) * count
-            current_offset = f"0x{fram_offset:04X}U"
-            fram_offset += total_bytes
-        else:
-            current_offset = "FRAM_OFFSET_UNUSED"
-        
-        br_flags = {
-            key: "1U" if str(row[col_idx]).strip().upper() == "TRUE" else "0U"
-            for key, col_idx in br_cols.items()
-        }            
-
-        entries.append({
-            "name": var_name,
-            "modbus_addr": int(reg_addr),
-            "fram_offset": current_offset,
-            "size": size_expr,
-            "default_value": cast_struct_value(var_type, vdef, "default"),
-            "min_value": cast_struct_value(var_type, vmin, "min"),
-            "max_value": cast_struct_value(var_type, vmax, "max"),
-            "ram_ptr": ram_ptr,
-            "ram_decl": ram_decl,
-            "type": map_type(var_type, is_array),
-            "length": count,
-            "access": map_access(access),            
-            "busy_reject_flags": br_flags,
-            "var_type_str": var_type
-        })
-
+    workbook = load_workbook_data(file_path, BASE_FRAM_OFFSET)
+    entries = workbook.entries
+    length_defs = workbook.length_defs
+    fram_total_size = workbook.fram_total_size
     h_text = textwrap.dedent("""\
         #ifndef MODBUS_REG_MAP_H
         #define MODBUS_REG_MAP_H
@@ -183,12 +82,12 @@ def main():
             access_mode_t access;
     """)
 
-    # ← busy_reject_flag_xxx を追加（正しいインデントで）
-    if br_cols:
-        for key in br_cols.keys():
+    br_keys = workbook.busy_reject_keys
+    if br_keys:
+        for key in br_keys:
             h_text += f"    uint8_t busy_reject_flag_{key};\n"
 
-    # 正しい閉じと外部宣言
+    # 豁｣縺励＞髢峨§縺ｨ螟夜Κ螳｣險
     h_text += textwrap.dedent("""\
         } reg_table_entry_t;
 
@@ -198,25 +97,21 @@ def main():
         #endif
     """)
 
-    # C89対応：modbus_reg_map.c の生成部分のみ抜粋修正版
+    # C89 対応: modbus_reg_map.c の生成部をここで構築
     c_text = '#include "modbus_reg_map.h"\n\n'
 
     for e in entries:
         c_text += f"{e['ram_decl']}\n"
 
-        value_type = e['ram_decl'].split()[1]  # 型名（static ... 型名 変数名...）から抽出
+        value_type = e['ram_decl'].split()[1]  # 蝙句錐・・tatic ... 蝙句錐 螟画焚蜷・..・峨°繧画歓蜃ｺ
         count = e['length']        
         
-        def extract_braced_value(value_str):
-            m = re.search(r"\{([-+0-9.eE]+)f?\}", value_str)
-            return m.group(1) if m else "0"
-
         vdef = extract_braced_value(e['default_value'])
         vmin = extract_braced_value(e['min_value'])
         vmax = extract_braced_value(e['max_value'])
 
 
-        # value列から生成（動的）
+        # value列から生成（動的に値を展開）
         def_val = format_array_init(value_type, vdef, count)
         min_val = format_array_init(value_type, vmin, count)
         max_val = format_array_init(value_type, vmax, count)
@@ -270,14 +165,14 @@ def main():
         base_name = entry["name"]
         length = entry["length"]
 
-        # ベースインデックス（g_reg_tableのインデックス）
+        # Base index for g_reg_table
         idx_lines.append(f"#define MODBUS_IDX_{base_name}  ({idx})")
 
         if length > 1:
             for i in range(length):
                 idx_lines.append(f"#define MODBUS_IDX_{base_name}_{i}  ({i})")
 
-        idx += 1  # ← g_reg_table[] の添字は1個分だけ進める
+        idx += 1  # advance g_reg_table index by one entry
 
     idx_lines.append("")
     idx_lines.append("#endif")
@@ -317,7 +212,7 @@ def main():
             access_lines.append(f"{base_type} get_{base_name}(void);")
             access_lines.append(f"int set_{base_name}({base_type} value);")
 
-            # masked setter のプロトタイプも追加
+            # masked setter 縺ｮ繝励Ο繝医ち繧､繝励ｂ霑ｽ蜉
             if base_type in ["uint16_t", "uint32_t"]:
                 access_lines.append(f"int set_{base_name}_masked({base_type} mask, {base_type} value);")
 
@@ -431,18 +326,17 @@ def main():
         access_c_lines.append("}")
 
         access_c_lines.append("")
-
-            # masked setter の追加（uint16_t / uint32_t のみ）
+        # masked setter for uint16_t / uint32_t only
         if base_type in ("uint16_t", "uint32_t") and not is_array:
             access_c_lines.append(f"int set_{name}_masked({base_type} mask, {base_type} value)")
             access_c_lines.append("{")
             access_c_lines.append(f"    {base_type} current = get_{name}();")
-            access_c_lines.append(f"    value &= mask;  // mask外のbitは落とす")            
+            access_c_lines.append("    value &= mask;  // mask outside bits are cleared")
             access_c_lines.append(f"    current &= (uint16_t)(~mask);")
             access_c_lines.append(f"    current |= value;")
             access_c_lines.append(f"    return set_{name}(current);")
             access_c_lines.append("}")
-            access_c_lines.append("")    
+            access_c_lines.append("")
 
     with open(os.path.join(out_dir, "modbus_reg_access.c"), "w", encoding="utf-8") as f:
         f.write("\n".join(access_c_lines))
@@ -480,7 +374,6 @@ def main():
         ''
     ]
 
-    # .hファイルにプロトタイプ追加（#endif の前）
     edge_h_lines.append("void modbus_reg_edge_init(void);")
 
     for entry in entries:
@@ -489,14 +382,13 @@ def main():
         is_array = entry["length"] > 1
         entry_type = entry["type"]
 
-        # float単体
         if entry_type == "REG_TYPE_FLOAT" and not is_array:
             func = f"detect_{name}_changed"
             edge_h_lines.append(f"int {func}(void);")
             edge_c_lines.extend([
                 f"int {func}(void)",
                 "{",
-                f"    static float prev;",  # ← 初期値を除去
+                f"    static float prev;",  # 竊・蛻晄悄蛟､繧帝勁蜴ｻ
                 f"    float curr = get_{name}();",
                 f"    if (!is_float_equal(prev, curr))",
                 "    {",
@@ -508,8 +400,7 @@ def main():
                 "}"
             ])
 
-        # 整数単体
-        elif entry_type in ("REG_TYPE_UINT16", "REG_TYPE_UINT32") and not is_array:
+        if entry_type in ("REG_TYPE_UINT16", "REG_TYPE_UINT32") and not is_array:
             for kind, condition in [
                 ("rising", "((prev & bit_mask) == 0U) && ((curr & bit_mask) != 0U)"),
                 ("falling", "((prev & bit_mask) != 0U) && ((curr & bit_mask) == 0U)"),
@@ -520,7 +411,7 @@ def main():
                 edge_c_lines.extend([
                     f"int {func}(uint16_t bit_mask)",
                     "{",
-                    f"    static {base_type} prev;",  # ← 初期値を除去
+                    f"    static {base_type} prev;",  # 竊・蛻晄悄蛟､繧帝勁蜴ｻ
                     f"    {base_type} curr = get_{name}();",
                     f"    if ({condition})",
                     "    {",
@@ -532,7 +423,7 @@ def main():
                     "}"
                 ])
 
-        # float配列
+        # float驟榊・
         elif entry_type == "REG_TYPE_FLOAT_ARRAY":
             # changed(index)
             func = f"detect_{name}_changed"
@@ -540,7 +431,7 @@ def main():
             edge_c_lines.extend([
                 f"int {func}(uint16_t index)",
                 "{",
-                f"    static float prev[{entry['length']}];",  # ← 初期化削除
+                f"    static float prev[{entry['length']}];",  # 竊・蛻晄悄蛹門炎髯､
                 f"    float curr;",
                 f"    if (index >= {entry['length']}U) return 0;",
                 f"    curr = get_{name}(index);",
@@ -560,7 +451,7 @@ def main():
             edge_c_lines.extend([
                 f"int {func}(void)",
                 "{",
-                f"    static float prev[{entry['length']}];",  # ← 初期化削除
+                f"    static float prev[{entry['length']}];",  # 竊・蛻晄悄蛹門炎髯､
                 f"    float curr;",
                 "    uint16_t i;",
                 f"    for (i = 0; i < {entry['length']}; ++i)",
@@ -577,7 +468,7 @@ def main():
                 "}"
             ])
 
-        # 整数配列
+        # 謨ｴ謨ｰ驟榊・
         elif entry_type in ("REG_TYPE_UINT16_ARRAY", "REG_TYPE_UINT32_ARRAY"):
             for kind, condition in [
                 ("rising", "((prev[index] & bit_mask) == 0U) && ((curr & bit_mask) != 0U)"),
@@ -589,7 +480,7 @@ def main():
                 edge_c_lines.extend([
                     f"int {func}(uint16_t index, uint16_t bit_mask)",
                     "{",
-                    f"    static {base_type} prev[{entry['length']}];",  # ← 初期化削除
+                    f"    static {base_type} prev[{entry['length']}];",  # 竊・蛻晄悄蛹門炎髯､
                     f"    {base_type} curr;",
                     f"    if (index >= {entry['length']}U) return 0;",
                     f"    curr = get_{name}(index);",
@@ -608,7 +499,7 @@ def main():
             edge_c_lines.extend([
                 f"int {func}(void)",
                 "{",
-                f"    static {base_type} prev[{entry['length']}];",  # ← 初期化削除
+                f"    static {base_type} prev[{entry['length']}];",  # 竊・蛻晄悄蛹門炎髯､
                 f"    {base_type} curr;",
                 "    uint16_t i;",
                 f"    for (i = 0; i < {entry['length']}; ++i)",
@@ -632,11 +523,11 @@ def main():
         code_lines.append("void modbus_reg_edge_init(void)")
         code_lines.append("{")
 
-            # 🔽 配列エントリが存在するかチェック
+            # 反 驟榊・繧ｨ繝ｳ繝医Μ縺悟ｭ伜惠縺吶ｋ縺九メ繧ｧ繝・け
         has_array_entries = any(entry["length"] > 1 for entry in entries)
 
         if has_array_entries:
-            code_lines.append("    uint16_t i = 0;")  # C89対応：ループ変数を冒頭に定義
+            code_lines.append("    uint16_t i = 0;")  # C89蟇ｾ蠢懶ｼ壹Ν繝ｼ繝怜､画焚繧貞・鬆ｭ縺ｫ螳夂ｾｩ
         
         code_lines.append("")
 
@@ -671,21 +562,20 @@ def main():
         code_lines.append("}")
         return "\n".join(code_lines)
 
-    # init関数用コード追加
+    # init髢｢謨ｰ逕ｨ繧ｳ繝ｼ繝芽ｿｽ蜉
     edge_c_lines.append("")
     edge_c_lines.append(emit_edge_init_block())
     
     edge_h_lines.append("#endif")
 
-    # 出力処理
     with open(os.path.join(out_dir, "modbus_reg_edge.c"), "w", encoding="utf-8") as f:
         f.write("\n".join(edge_c_lines))
 
     with open(os.path.join(out_dir, "modbus_reg_edge.h"), "w", encoding="utf-8") as f:
         f.write("\n".join(edge_h_lines))
 
-    # 機能追加はここまで / End of additional functionality
-    print("✅ ファイル出力完了:", out_dir)
+    # 讖溯・霑ｽ蜉縺ｯ縺薙％縺ｾ縺ｧ / End of additional functionality
+    print("生成ファイル出力完了:", out_dir)
 
 if __name__ == "__main__":
     main()
