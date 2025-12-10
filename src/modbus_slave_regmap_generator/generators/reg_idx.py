@@ -13,7 +13,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         "#ifndef MODBUS_REG_IDX_SLAVE_H",
         "#define MODBUS_REG_IDX_SLAVE_H",
         "",
-        "#define MODBUS_SLAVE_ADDR 0x01",
+        f"#define MODBUS_SLAVE_ADDR {workbook.modbus_slave_addr}",
         "",
         "/* Modbus register index definitions */",
     ]

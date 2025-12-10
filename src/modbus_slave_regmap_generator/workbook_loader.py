@@ -27,6 +27,7 @@ class WorkbookData:
     entries: List[dict]
     length_defs: Dict[str, int]
     fram_total_size: int
+    modbus_slave_addr: int
     busy_reject_keys: List[str]
 
 
@@ -37,6 +38,19 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
     config_df = pd.read_excel(file_path, sheet_name="Config", header=None)
 
     fram_total_size = int(config_df.iloc[4, 3])
+
+    modbus_slave_addr = None
+    for _, row in config_df.iloc[4:].iterrows():  # start scan at Config!C5
+        key = str(row[2]).strip().upper()
+        if key == "SLAVE_ADDR":
+            try:
+                modbus_slave_addr = int(row[3])
+            except (TypeError, ValueError) as exc:  # pragma: no cover - invalid Excel value
+                raise ValueError("Config!D column SLAVE_ADDR must be an integer") from exc
+            break
+
+    if modbus_slave_addr is None:
+        raise ValueError("Config!C column does not contain SLAVE_ADDR entry")
 
     length_defs: Dict[str, int] = {}
     for _, row in lengthdefs_df.iterrows():
@@ -134,5 +148,6 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         entries=entries,
         length_defs=length_defs,
         fram_total_size=fram_total_size,
+        modbus_slave_addr=modbus_slave_addr,
         busy_reject_keys=list(br_cols.keys()),
     )
