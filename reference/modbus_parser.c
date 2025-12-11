@@ -459,7 +459,12 @@ int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *dat
     if (is_all_valid && (need_write != 0))
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(uint16_t)));
-        FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf, (uint16_t)(len * sizeof(uint16_t)));
+
+        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        {
+            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
+                                     (uint16_t)(len * sizeof(uint16_t)));
+        }
     }
 
     return is_all_valid ? 0 : -1;
@@ -526,7 +531,12 @@ int handle_write_uint32_entry(const reg_table_entry_t *entry, const uint8_t *dat
     if (is_all_valid && (need_write != 0))
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(uint32_t)));
-        FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf, (uint16_t)(len * sizeof(uint32_t)));
+
+        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        {
+            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
+                                     (uint16_t)(len * sizeof(uint32_t)));
+        }
     }
 
     return is_all_valid ? 0 : -1;
@@ -597,7 +607,12 @@ int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data
     if (is_all_valid && (need_write != 0))
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(float)));
-        FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf, (uint16_t)(len * sizeof(float)));
+
+        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        {
+            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
+                                     (uint16_t)(len * sizeof(float)));
+        }
     }
 
     return is_all_valid ? 0 : -1;
