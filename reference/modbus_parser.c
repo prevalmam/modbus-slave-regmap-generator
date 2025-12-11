@@ -1,7 +1,5 @@
-// modbus_parser.c
-
 #include "modbus_parser.h"
-#include "modbus_reg_map.h"
+#include "modbus_reg_map_slave.h"
 #include <string.h>
 
 /* Function Codes */
@@ -93,17 +91,17 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     end_addr = (uint16_t)(start_addr + num_regs);
     p = &tx_buf[0];
 
-    *p++ = slave_addr; // slave address
-    *p++ = 0x03; // function code: read holding registers
-    *p++ = (uint8_t)(num_regs * 2U); // byte count
+    *p++ = slave_addr; 
+    *p++ = 0x03; 
+    *p++ = (uint8_t)(num_regs * 2U); 
 
-    for (i = 0U; i < g_reg_table_size; ++i)
+    for (i = 0U; i < g_reg_table_slave_size; ++i)
     {
     	uint16_t addr;
     	uint16_t elemsize;
     	uint16_t total_regs;
 
-        entry = &g_reg_table[i];
+        entry = &g_reg_table_slave[i];
         addr = entry->modbus_addr;
         elemsize = (uint16_t)(entry->size / entry->length);
         total_regs = (uint16_t)(((uint32_t)elemsize * entry->length) / 2U);
@@ -350,14 +348,14 @@ int handle_modbus_multi_write(uint16_t start_addr, uint16_t num_regs, const uint
     uint16_t i;
     int result = 0;
 
-    for (i = 0U; i < g_reg_table_size; ++i)
+    for (i = 0U; i < g_reg_table_slave_size; ++i)
     {
     	int status = -1;
     	uint16_t addr;
     	uint16_t elemsize;
     	uint16_t total_regs;
     	const uint8_t *entry_data;
-        const reg_table_entry_t *entry = &g_reg_table[i];
+        const reg_table_entry_t *entry = &g_reg_table_slave[i];
 
         if (entry->access == ACCESS_READ)
         {

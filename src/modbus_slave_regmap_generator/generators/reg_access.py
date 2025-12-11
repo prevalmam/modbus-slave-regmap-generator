@@ -145,7 +145,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append(f"int set_{name}_masked({base_type} mask, {base_type} value)")
             access_c_lines.append("{")
             access_c_lines.append(f"    {base_type} current = get_{name}();")
-            access_c_lines.append("    value &= mask;  // mask outside bits are cleared")
+            access_c_lines.append("    value &= mask;  /* mask outside bits are cleared */")
             access_c_lines.append("    current &= (uint16_t)(~mask);")
             access_c_lines.append("    current |= value;")
             access_c_lines.append(f"    return set_{name}(current);")
