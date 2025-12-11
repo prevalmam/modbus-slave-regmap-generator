@@ -1,5 +1,4 @@
 # modbus-slave-regmap-generator
-**内容は工事中です。master側のREADME.mdをコピーしただけなのでslave側のREADME.mdを作成してください。**
 
 **modbus-slave-regmap-generator** は，Modbus スレーブ側のレジスタマップ仕様書（Excel）から，
 
@@ -45,7 +44,7 @@ Modbus のレジマップやプロトコル部分は仕様書で厳密に決ま�
   - `openpyxl`
   - `tkinter`（GUI のファイル選択ダイアログに使用）
 - **入力ファイル**: Excel（`.xlsx`）形式のレジスタ定義書  
-- **出力**: C 言語（C99 相当）で実装された Modbus マスタ向けコード一式  
+- **出力**: C 言語（C89 相当）で実装された Modbus スレーブ向けコード一式  
 
 ※ Modbus 通信の実装そのもの（UART/SPI/RS-485 のドライバ等）は対象外です。  
   あくまで「レジマップ → コード生成」に特化したツールです。
@@ -70,7 +69,7 @@ pip install .
 2. コマンドラインから以下を実行します。
 
 ```powershell
-mmg
+msrg
 ```
 3. 起動後に Excel ファイルを選択するとExcel と同じフォルダに C/C ヘッダファイル群が出力されます。
 
@@ -81,10 +80,10 @@ mmg
 生成されたコードは、以下のステップで使用します。
 
 1. 送信ドライバ差し込み（`modbus_sender_output` 実装）
-2. 初期化（エッジ検出関数の初期化）
-3. 送信処理（read/write リクエストを送る）
-4. 受信処理（応答フレームを受信し、パースする）
-5. レジスタ更新（RAM 上の値が自動更新される）
+2. FRAMドライバ差し込み
+3. 初期化（エッジ検出関数の初期化）
+4. 送信処理（read/write リクエストを送る）
+5. 受信処理（応答フレームを受信し、パースし、(F)RAM 反映）
 6. 値の参照・更新（getter/setter でアプリ側からアクセス）
 7. エッジ検出（値の変化を検出し、アプリイベントとして処理）
 ---
@@ -117,7 +116,52 @@ void modbus_sender_output(const uint8_t *data, uint16_t len)
 
 このフックを埋めておけば、以降の送信 API（read/write リクエスト）はすべて生成コードだけで完結します。
 
-### 4.2 初期化
+### 4.2 FRAMドライバ差し込み
+
+受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `FRAM` 列を `TRUE` にしたエントリについて `FRAM_Request_Write_Bytes()` を必ず呼び出します。`FRAM` を `TRUE` にした順に、`BASE_FRAM_OFFSET`（デフォルト `0x0002`）から自動採番したオフセットが割り当てられます。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の FRAM／EEPROM ドライバをプロジェクト側で実装してください。
+
+```c
+extern void FRAM_Request_Write_Bytes(uint16_t offset,
+                                     const uint8_t *data,
+                                     uint16_t length);
+```
+
+実装時のポイント:
+
+1. `offset` は FRAM 先頭からのバイトオフセットです。RegisterTable で `FRAM=TRUE` を付けたエントリ順に `BASE_FRAM_OFFSET`（[main.py](src/modbus_slave_regmap_generator/main.py#L17)）から加算されます。異なる開始番地を使いたい場合は、この定数を変更してください。
+2. `data` はレジスタ 1 ブロック分のシリアル化済みバイト列です。
+3. `length` は書き込む総バイト数です。
+
+例えば I2C 接続の FRAM へブロック書き込みする場合:
+
+```c
+void FRAM_Request_Write_Bytes(uint16_t offset,
+                              const uint8_t *data,
+                              uint16_t length)
+{
+    fram_lock_bus();
+    fram_begin_transaction();
+    fram_write(offset, data, length);
+    fram_end_transaction();
+    fram_unlock_bus();
+}
+```
+
+もしプロジェクトで FRAMを使わない場合でも、リンカエラーを防ぐためにシグネチャどおりのスタブだけは用意してください。スタブ内で全引数を `(void)` キャストしておけば未使用警告も抑止できます。
+
+```c
+void FRAM_Request_Write_Bytes(uint16_t offset,
+                              const uint8_t *data,
+                              uint16_t length)
+{
+    (void)offset;
+    (void)data;
+    (void)length;
+}
+```
+
+
+### 4.3 初期化
 
 起動時に行うべき初期処理は次の 2 ステップに集約されます。
 
@@ -152,12 +196,11 @@ void app_init(void)
 
 その他の生成ファイル（reg_map/access/sender/reply_handler 等）は静的データや純粋関数のみで構成されているため、追加の初期化は不要です。
 
-### 4.3 送信処理（Request の送信）
+### 4.4 送信処理（Request の送信）
 
 生成コード側では、各レジスタブロックごとに **read 系 (`modbus_sender_req_*`)** と **write 系 (`modbus_sender_set_*`)** の 2 本立て API が自動生成されます。`MODBUS_SLAVE_ADDR` は Excel の Config シートから取得され、すべての送信フレームに自動で組み込まれます。
 
-#### 4.3.1 Read Request（0x03）
-
+#### 4.4.1 Read Request（0x03）
 - 監視したいブロックに対して `modbus_sender_req_<VarName>()` を呼び出すだけで、Function Code 0x03 のフレームが生成されます。
 - 送信バッファは `modbus_sender_output()` へそのまま受け渡されるため、ユーザーは UART／RS-485 ドライバ内で実際の TX を完了させます。
 
@@ -168,7 +211,7 @@ void poll_uptime_sec(void)
 }
 ```
 
-#### 4.3.2 Write Request（0x10）
+#### 4.4.2 Write Request（0x10）
 
 - アプリ側で RAM 上の値を setter で更新したあと、`modbus_sender_set_<VarName>()` を呼び出すと Function Code 0x10（Write Multiple Registers）が組み立てられます。
 - データ型ごとに `modbus_sender_generic_u16/u32/float()` が内部で選択され、必要なバイト長や配列展開をすべて自動で行います。
@@ -184,7 +227,7 @@ void update_device_mode(uint16_t new_value)
 
 ---
 
-### 4.4 受信処理とパース
+### 4.5 受信処理とパースと(F)RAM 反映
 
 応答フレームを受信したら、reply_handler に渡すだけで完了します。
 
@@ -199,32 +242,33 @@ void update_device_mode(uint16_t new_value)
 - レジスタ値の展開
 - Min/Max チェック
 - RAM（g_reg_table_slave[]）への反映
+- FRAM 書き込み要求（FRAM 列が TRUE の場合）
 
 ---
 
-### 4.5 レジスタアクセス（getter / setter）
+### 4.6 レジスタアクセス（getter / setter）
 
-#### 4.5.1 値の読み出し（getter）
+#### 4.6.1 値の読み出し（getter）
 
     uint16_t mode = get_device_mode();
     float process_value = get_process_value();
 
-#### 4.5.2 値の書き換え（setter）
+#### 4.6.2 値の書き換え（setter）
 
     set_device_mode(2);
     set_process_value(36.5f);
 
 なお、setter は min/max チェックを自動で行います。 範囲外の値をセットしようとした場合は何も変更されません。
 
-#### 4.5.3 下限値・上限値の取得
+#### 4.6.3 下限値・上限値の取得
 
     uint16_t min_mode = get_device_mode_min();
     uint16_t max_mode = get_device_mode_max();
 ---
 
-### 4.6 エッジ検出（値変化の検知）
+### 4.7 エッジ検出（値変化の検知）
 
-#### 4.6.1 立ち上がり検出の例（単体値）
+#### 4.7.1 立ち上がり検出の例（単体値）
 
 ```c
     if (detect_device_mode_rising(0xffff)) {
@@ -234,7 +278,7 @@ void update_device_mode(uint16_t new_value)
 
 特定のビットマスクを指定することも可能：
 
-#### 4.6.2 立ち下がり検出の例（単体値）
+#### 4.7.2 立ち下がり検出の例（単体値）
 
 ```c
     if (detect_device_mode_falling(0xffff)) {
@@ -242,7 +286,7 @@ void update_device_mode(uint16_t new_value)
     }
 ```
 
-#### 4.6.3 トグル検出の例（配列値）
+#### 4.7.3 トグル検出の例（配列値）
 
 ```c
     if (detect_discrete_inputs_toggled(0x0003)) {
@@ -268,6 +312,7 @@ void update_device_mode(uint16_t new_value)
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
+| `FRAM` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタは FRAM/EEPROM に保存される |
 
 ![入力 Excel のフォーマット例](images/format.png)
 
@@ -280,13 +325,16 @@ void update_device_mode(uint16_t new_value)
 | `Macro_Name` | ArrayLen のマクロ名 |
 | `Value` | マクロの値 |
 
+
 ![LengthDefs シートの例](images/format_LengthDefs.png)
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 
 #### 5.1.3.Config シート
 
-D4セルに Modbus スレーブアドレス（10進数）を指定します。
+D5セルに FRAMのサイズ（10進数）を指定します。
+
+D6セルに Modbus スレーブアドレス（10進数）を指定します。
 
 ![Config シートの例](images/format_Config.png)
 
@@ -313,17 +361,4 @@ D4セルに Modbus スレーブアドレス（10進数）を指定します。
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
-| `modbus_reply_handler_slave.c/h` | Read Holding Registers 応答の CRC 検証、値取り出し、レンジチェック、RAM 更新 |
-
-#### 5.2.4.送信処理
-
-| ファイル | 役割 |
-|---------|--------------------------------------------|
-| `modbus_sender_gen.c/h` | 各レジスタブロックごとの read request / write set ラッパー、直近リード範囲の保持 |
-| `modbus_sender_generic.c/h` | write multiple registers 用の型別共通送信関数（uint16/uint32/float） |
-
-#### 5.2.5.共通ユーティリティ
-
-| ファイル | 役割 |
-|---------|--------------------------------------------|
-| `modbus_crc_util.c/h` | Modbus CRC16 の付与・計算ユーティリティ |
+| `modbus_parser.c/h` | Read Holding Registers 応答の CRC 検証、値取り出し、レンジチェック、RAM 更新 |
