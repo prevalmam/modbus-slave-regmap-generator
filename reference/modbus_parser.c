@@ -18,20 +18,18 @@
 #define MODBUS_EXC_ILLEGAL_DATA_ADDRESS    (0x02U)
 #define MODBUS_EXC_ILLEGAL_DATA_VALUE      (0x03U)
 #define MODBUS_EXC_SLAVE_DEVICE_FAILURE    (0x04U)
-//#define MODBUS_EXC_SLAVE_DEVICE_BUSY  0x06U .hに記載(command_handlerにて使用のため）
-
 
 /* Protocol Constants */
 #define MODBUS_MIN_FRAME_LENGTH            (8U)  /* addr + func + data + CRC */
 #define MODBUS_SINGLE_REG_DATA_LENGTH      (4U)  /* 2 bytes address + 2 bytes data */
 #define MODBUS_WRITE_MULTI_HEADER_LENGTH   (7U)  /* 7 = addr(1) + func(1) + start(2) + count(2) + byte count(1) */
 
-#define MODBUS_REG_SIZE_BYTES    (2U)   /* 1レジスタ = 2バイト */
-#define MODBUS_MAX_DATA_LENGTH   (252U) /* Modbusプロトコル仕様上の最大byte数 */
+#define MODBUS_REG_SIZE_BYTES    (2U)
+#define MODBUS_MAX_DATA_LENGTH   (252U)
 
 #define MAX_MATCHED_ENTRIES 256U
 
-#define FLOAT_EPSILON (1.0e-6f)  /* 必要に応じて調整 */
+#define FLOAT_EPSILON (1.0e-6f)
 
 static int check_range_float(float val, float min, float max);
 static int check_range_uint16(uint16_t val, uint16_t min, uint16_t max);
@@ -41,17 +39,17 @@ static int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8
 static int handle_write_uint32_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
 static int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
 
-static void modbus_send_write_single_ack(uint16_t addr, const uint8_t *value);
+static void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8_t *value);
 
 static int is_float_equal(float a, float b);
 
-static void modbus_send_echo_response(const uint8_t *rx_buf, uint16_t len);
-static void modbus_send_write_multi_ack(uint16_t start_addr, uint16_t num_regs);
+static void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16_t len);
+static void modbus_send_write_multi_ack(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs);
 static int handle_modbus_multi_write(uint16_t start_addr, uint16_t num_regs, const uint8_t *data);
 static int modbus_validate_crc(const uint8_t* frame, uint16_t length);
 
 static uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc);
-int handle_modbus_read(uint16_t start_addr, uint16_t num_regs);
+int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs);
 
 static void sort_entries_by_address(const reg_table_entry_t *matched[], uint16_t count);
 
@@ -80,7 +78,7 @@ void sort_entries_by_address(const reg_table_entry_t *matched[], uint16_t count)
     }
 }
 
-int handle_modbus_read(uint16_t start_addr, uint16_t num_regs)
+int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs)
 {
     uint16_t i;
     uint16_t end_addr;
@@ -95,11 +93,10 @@ int handle_modbus_read(uint16_t start_addr, uint16_t num_regs)
     end_addr = (uint16_t)(start_addr + num_regs);
     p = &tx_buf[0];
 
-    *p++ = 0x01; // slave address
+    *p++ = slave_addr; // slave address
     *p++ = 0x03; // function code: read holding registers
     *p++ = (uint8_t)(num_regs * 2U); // byte count
 
-    // (1) 抽出フェーズ
     for (i = 0U; i < g_reg_table_size; ++i)
     {
     	uint16_t addr;
@@ -122,10 +119,8 @@ int handle_modbus_read(uint16_t start_addr, uint16_t num_regs)
         }
     }
 
-    // (2) ソートフェーズ
     sort_entries_by_address(matched, match_count);
 
-    // (3) 書き出しフェーズ
     for (i = 0U; i < match_count; ++i)
     {
     	uint16_t j = 0;
@@ -219,7 +214,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                 {
                     start_addr = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | rx_buf[3]);
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
-                    status = handle_modbus_read(start_addr, num_regs);
+                    status = handle_modbus_read(slave_addr, start_addr, num_regs);
                     if (status != 0)
                     {
                         modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
@@ -240,8 +235,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
             		status = handle_modbus_multi_write(start_addr, 1U, data);
             		if (status == 0)
             		{
-            			// 正常系
-            			modbus_send_write_single_ack(start_addr, data);
+                        modbus_send_write_single_ack(slave_addr, start_addr, data);
             		}
             		else
             		{
@@ -258,7 +252,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                 if ((len >= MODBUS_MIN_FRAME_LENGTH) &&
                     (rx_buf[2] == 0x00U) && (rx_buf[3] == 0x00U))
                 {
-                    modbus_send_echo_response(rx_buf, len);
+                    modbus_send_echo_response(slave_addr, rx_buf, len);
                 }
                 else
                 {
@@ -267,13 +261,11 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                 break;
 
             case MODBUS_FUNC_WRITE_MULTIPLE_REGS:  /* 0x10: Write Multiple Registers */
-            	// ヘッダ+CRC（レジスタ数0でも最低限必要な長さ）
                 if (len >= (MODBUS_WRITE_MULTI_HEADER_LENGTH + 2U)) /* 7 + CRC */
                 {
                     start_addr = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | (uint16_t)rx_buf[3]);
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
 
-                    // 要求されたレジスタ数分のデータが入っているか
                     if (len >= (MODBUS_WRITE_MULTI_HEADER_LENGTH + (uint16_t)(2U * num_regs) + 2U))
                     {
                     	data = &rx_buf[7];
@@ -281,8 +273,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                     	status = handle_modbus_multi_write(start_addr, num_regs, data);
                     	if (status == 0)
                     	{
-                    		// 正常系
-                    		modbus_send_write_multi_ack(start_addr, num_regs);
+                    		modbus_send_write_multi_ack(slave_addr, start_addr, num_regs);
                     	}
                     	else
                     	{
@@ -307,14 +298,13 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
     }
 }
 
-void modbus_send_echo_response(const uint8_t *rx_buf, uint16_t len)
+void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16_t len)
 {
     uint8_t frame[256];
     uint16_t i;
     uint16_t frame_len = 0U;
     int is_valid = 1;
 
-    /* === 入力チェック === */
     if ((rx_buf == (const uint8_t *)0) || (len == 0U))
     {
         is_valid = 0;
@@ -326,7 +316,7 @@ void modbus_send_echo_response(const uint8_t *rx_buf, uint16_t len)
 
     if (is_valid != 0)
     {
-        frame[0] = 0x01U; /* スレーブアドレス固定 */
+        frame[0] = slave_addr;
 
         for (i = 1U; i < len; ++i)
         {
@@ -434,7 +424,6 @@ int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *dat
 
     int is_all_valid = 0;
 
-    /* === 入力チェック === */
     if ((entry == (const reg_table_entry_t *)0) || (data == (const uint8_t *)0))
     {
         is_valid_ptr = 0;
@@ -448,7 +437,6 @@ int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *dat
         is_valid_buf = 0;
     }
 
-    /* === データチェック === */
     if ((is_valid_ptr != 0) && (is_valid_len != 0) && (is_valid_buf != 0))
     {
         for (i = 0U; i < len; ++i)
@@ -617,10 +605,9 @@ int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data
     return is_all_valid ? 0 : -1;
 }
 
-void modbus_send_write_multi_ack(uint16_t start_addr, uint16_t num_regs)
+void modbus_send_write_multi_ack(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs)
 {
     uint8_t tx_buf[8U];  /* addr + func + addr(2) + count(2) + CRC(2) */
-    uint8_t slave_addr = 0x01U;  /* 通常は受信バッファから復元（今回は仮） */
 
     tx_buf[0] = slave_addr;
     tx_buf[1] = MODBUS_FUNC_WRITE_MULTIPLE_REGS;
@@ -634,29 +621,22 @@ void modbus_send_write_multi_ack(uint16_t start_addr, uint16_t num_regs)
     ModbusPort_RequestSend(tx_buf, 8U);
 }
 
-void modbus_send_write_single_ack(uint16_t addr, const uint8_t *value)
+void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8_t *value)
 {
     uint8_t tx_buf[8U];  /* addr + func + reg_addr(2) + value(2) + CRC(2) */
-    uint8_t slave_addr = 0x01U;  /* 本来は受信時に保存しておいた値を使う */
 
     tx_buf[0] = slave_addr;
     tx_buf[1] = MODBUS_FUNC_WRITE_SINGLE_REG;
     tx_buf[2] = (uint8_t)(addr >> 8U);
     tx_buf[3] = (uint8_t)(addr & 0xFFU);
-    tx_buf[4] = value[0];  /* 上位バイト */
-    tx_buf[5] = value[1];  /* 下位バイト */
+    tx_buf[4] = value[0];  /* ä¸ä½ãã¤ã */
+    tx_buf[5] = value[1];  /* ä¸ä½ãã¤ã */
 
     (void)modbus_append_crc(tx_buf, 6U);
 
     ModbusPort_RequestSend(tx_buf, 8U);
 }
 
-/**
- * @brief Modbus RTUのCRCチェックを行う（returnは1か所）
- * @param frame 入力フレームポインタ
- * @param length フレーム全体の長さ（CRC含む）
- * @return 1 = CRC一致, 0 = 不一致
- */
 int modbus_validate_crc(const uint8_t* frame, uint16_t length)
 {
     uint16_t i;
@@ -697,31 +677,19 @@ int modbus_validate_crc(const uint8_t* frame, uint16_t length)
     return result;
 }
 
-/**
- * @brief Modbus例外応答を生成して送信（CRC付加は別関数）
- * @param slave_addr スレーブアドレス
- * @param function_code 要求された機能コード（上位1bitを立てて返す）
- * @param exception_code 例外コード（例：0x01＝不正機能）
- */
 void modbus_send_exception_response(uint8_t slave_addr, uint8_t function_code, uint8_t exception_code)
 {
-    uint8_t response[5]; // 3バイト + CRC 2バイト分確保
+    uint8_t response[5];
     uint16_t len;
     response[0] = slave_addr;
-    response[1] = function_code | 0x80U;  // 例外応答：MSBを1にする
+    response[1] = function_code | 0x80U;
     response[2] = exception_code;
 
-    len = modbus_append_crc(response, 3U);  // CRCを付加して長さ取得
+    len = modbus_append_crc(response, 3U);
 
     ModbusPort_RequestSend(response, len);
 }
 
-/**
- * @brief 指定されたフレームにCRCを計算して末尾に付加する
- * @param frame CRC計算対象のフレーム（CRCを書き込むスペース含む）
- * @param len_without_crc CRC計算対象のバイト数（CRC除く）
- * @return 付加後の合計長さ（len_without_crc + 2）
- */
 uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
 {
     uint16_t crc = 0xFFFFU;
