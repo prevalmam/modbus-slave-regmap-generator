@@ -1,3 +1,38 @@
+from __future__ import annotations
+
+from typing import List
+
+from ..workbook_loader import WorkbookData
+from . import GeneratedFile
+
+MODBUS_PARSER_HEADER = """\
+/*
+ * modbus_parser.h
+ *
+ *  Created on: 2025/05/22
+ *      Author: 1225190
+ */
+
+#ifndef MODBUSLAYER_MODBUS_PARSER_H_
+#define MODBUSLAYER_MODBUS_PARSER_H_
+
+#include <stdint.h>
+
+#define MODBUS_EXC_SLAVE_DEVICE_BUSY  0x06U
+
+extern void FRAM_Request_Write_Bytes(uint16_t offset,
+                                       const uint8_t *data,
+                                       uint16_t length);
+
+extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
+
+void modbus_send_exception_response(uint8_t slave_addr, uint8_t function_code, uint8_t exception_code);
+void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
+
+#endif /* MODBUSLAYER_MODBUS_PARSER_H_ */
+"""
+
+MODBUS_PARSER_SOURCE = """\
 #include "modbus_parser.h"
 #include "modbus_reg_map_slave.h"
 #include <string.h>
@@ -642,8 +677,8 @@ void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8
     tx_buf[1] = MODBUS_FUNC_WRITE_SINGLE_REG;
     tx_buf[2] = (uint8_t)(addr >> 8U);
     tx_buf[3] = (uint8_t)(addr & 0xFFU);
-    tx_buf[4] = value[0];  /* ä¸ä½ãã¤ã */
-    tx_buf[5] = value[1];  /* ä¸ä½ãã¤ã */
+    tx_buf[4] = value[0];
+    tx_buf[5] = value[1];
 
     (void)modbus_append_crc(tx_buf, 6U);
 
@@ -733,3 +768,12 @@ uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
 
     return (uint16_t)(len_without_crc + 2U);
 }
+"""
+
+
+def generate(_: WorkbookData) -> List[GeneratedFile]:
+    """Return static modbus parser files so they are part of the generated artifacts."""
+    return [
+        GeneratedFile("modbus_parser.h", MODBUS_PARSER_HEADER),
+        GeneratedFile("modbus_parser.c", MODBUS_PARSER_SOURCE),
+    ]
