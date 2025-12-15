@@ -1,18 +1,17 @@
 import os
+import sys
 from typing import List
 import tkinter as tk
 from tkinter import filedialog
 
-try:
-    from .generators import GeneratedFile
-    from .generators import parser, reg_access, reg_edge, reg_idx, reg_map
-    from .workbook_loader import load_workbook_data
-    from .writer import write_generated_files
-except ImportError:  # pragma: no cover - fallback for direct execution
-    from generators import GeneratedFile  # type: ignore
-    from generators import parser, reg_access, reg_edge, reg_idx, reg_map  # type: ignore
-    from workbook_loader import load_workbook_data  # type: ignore
-    from writer import write_generated_files  # type: ignore
+if __package__ in {None, ""}:  # pragma: no cover - support direct execution / PyInstaller
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.append(os.path.dirname(current_dir))
+
+from modbus_slave_regmap_generator.generators import GeneratedFile
+from modbus_slave_regmap_generator.generators import parser, reg_access, reg_edge, reg_idx, reg_map
+from modbus_slave_regmap_generator.workbook_loader import load_workbook_data
+from modbus_slave_regmap_generator.writer import write_generated_files
 
 BASE_FRAM_OFFSET = 0x0002
 
