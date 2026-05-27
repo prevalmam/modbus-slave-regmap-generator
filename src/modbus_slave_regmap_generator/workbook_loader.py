@@ -69,6 +69,29 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         if str(row[2]) == "Reg_Addr":
             header_row_index = i
             header_row = reg_table_df.iloc[i]
+            required_headers = [
+                (2, "Reg_Addr"),
+                (3, "VarName"),
+                (4, "Type"),
+                (5, "ArrayLen"),
+                (6, "Access"),
+                (7, "Min"),
+                (8, "Max"),
+                (9, "Default"),
+                (10, "FRAM"),
+                (11, "EDGE"),
+            ]
+            for col_idx, expected in required_headers:
+                if col_idx >= len(header_row) or pd.isna(header_row.iloc[col_idx]):
+                    actual = ""
+                else:
+                    actual = str(header_row.iloc[col_idx]).strip()
+                if actual != expected:
+                    excel_col = _excel_column_name(col_idx + 1)
+                    raise ValueError(
+                        f"RegisterTable header {excel_col}{header_row_index + 1}: "
+                        f"expected '{expected}', got '{actual or '<empty>'}'"
+                    )
 
             for idx, col_name in enumerate(header_row):
                 if isinstance(col_name, str) and col_name.startswith("BR_"):
@@ -92,6 +115,9 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         columns = row[2:11]
         if columns.isnull().any():
             continue
+
+        edge_flag = row.iloc[11] if len(row) > 11 else None
+        edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
 
         reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef, fram_flag = columns
         var_name = str(var_name).strip()
@@ -141,6 +167,7 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
                 "access": map_access(access),
                 "busy_reject_flags": br_flags,
                 "var_type_str": var_type,
+                "edge": edge_enabled,
             }
         )
 
@@ -151,3 +178,28 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         modbus_slave_addr=modbus_slave_addr,
         busy_reject_keys=list(br_cols.keys()),
     )
+
+
+def _parse_bool_cell(value, column_name: str, row_number: int) -> bool:
+    if pd.isna(value) or str(value).strip() == "":
+        raise ValueError(
+            f"RegisterTable row {row_number}: {column_name} is empty. Set TRUE or FALSE."
+        )
+
+    normalized = str(value).strip().upper()
+    if normalized == "TRUE":
+        return True
+    if normalized == "FALSE":
+        return False
+
+    raise ValueError(
+        f"RegisterTable row {row_number}: {column_name} must be TRUE or FALSE, got '{value}'."
+    )
+
+
+def _excel_column_name(column_number: int) -> str:
+    name = ""
+    while column_number > 0:
+        column_number, remainder = divmod(column_number - 1, 26)
+        name = chr(ord("A") + remainder) + name
+    return name

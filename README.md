@@ -209,13 +209,13 @@ void FRAM_Request_Write_Bytes(uint16_t offset,
     }
     ```
 
-2. **`modbus_reg_edge_slave_init()` でエッジ検出のプリロードを行う** — 上記の RAM セット後にこの関数を 1 回呼ぶと、すべてのエッジ検出器が「現在値＝前回値」で同期され、初回ポーリング時の誤検知を防げます。以降は周期タスクや受信ハンドラから各 `detect_*` 関数をそのまま利用できます。
+2. **`modbus_reg_edge_init()` でエッジ検出のプリロードを行う** — 上記の RAM セット後にこの関数を 1 回呼ぶと、RegisterTable で `EDGE` 列を `TRUE` にしたエッジ検出器が「現在値＝前回値」で同期され、初回ポーリング時の誤検知を防げます。以降は周期タスクや受信ハンドラから各 `detect_*` 関数をそのまま利用できます。
 
 ```c
 void app_init(void)
 {
     load_reg_defaults();          /* RAM に初期値を展開 */
-    modbus_reg_edge_slave_init(); /* エッジ検出の前回値をプリロード */
+    modbus_reg_edge_init();       /* エッジ検出の前回値をプリロード */
 }
 ```
 
@@ -334,10 +334,12 @@ void update_device_mode(uint16_t new_value)
 | `VarName` | `device_mode` | レジスタの論理名（C 変数名にも使用） |
 | `Type` | `uint16_t` / `uint32_t` / `float` | 型（C コード生成に利用） |
 | `ArrayLen` | `1` / `NUM_DISCRETE_INPUTS` | 配列長。複数の場合は連続アドレスを自動展開 |
+| `Access` | `RW` / `RO` | Modbus 経由のアクセス権 |
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
 | `FRAM` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタは FRAM/EEPROM に保存される |
+| `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
 
 ![入力 Excel のフォーマット例](images/format.png)
 
@@ -380,7 +382,7 @@ D6セルに Modbus スレーブアドレス（10進数）を指定します。
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
-| `modbus_reg_edge_slave.c/h` | 単体値・配列値どちらにも対応した変化検出（rising / falling / toggled / changed）関数群 |
+| `modbus_reg_edge_slave.c/h` | `EDGE=TRUE` のレジスタに対する変化検出（rising / falling / toggled / changed）関数群 |
 
 #### 5.2.3.受信処理
 

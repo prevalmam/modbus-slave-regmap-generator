@@ -2,7 +2,7 @@ import os
 import sys
 from typing import List
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 if __package__ in {None, ""}:  # pragma: no cover - support direct execution / PyInstaller
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -24,17 +24,21 @@ def main() -> None:
         print("キャンセルされました")
         return
 
-    workbook = load_workbook_data(file_path, BASE_FRAM_OFFSET)
+    try:
+        workbook = load_workbook_data(file_path, BASE_FRAM_OFFSET)
 
-    generated_files: List[GeneratedFile] = []
-    generated_files.extend(reg_map.generate(workbook))
-    generated_files.extend(reg_idx.generate(workbook))
-    generated_files.extend(reg_access.generate(workbook))
-    generated_files.extend(reg_edge.generate(workbook))
-    generated_files.extend(parser.generate(workbook))
+        generated_files: List[GeneratedFile] = []
+        generated_files.extend(reg_map.generate(workbook))
+        generated_files.extend(reg_idx.generate(workbook))
+        generated_files.extend(reg_access.generate(workbook))
+        generated_files.extend(reg_edge.generate(workbook))
+        generated_files.extend(parser.generate(workbook))
 
-    out_dir = os.path.dirname(file_path)
-    write_generated_files(out_dir, generated_files)
+        out_dir = os.path.dirname(file_path)
+        write_generated_files(out_dir, generated_files)
+    except ValueError as exc:
+        messagebox.showerror("modbus-slave-regmap-generator", str(exc))
+        return
 
     print("生成ファイル出力完了:", out_dir)
 

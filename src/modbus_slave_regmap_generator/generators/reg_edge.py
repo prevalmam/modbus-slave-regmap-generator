@@ -8,7 +8,7 @@ from . import GeneratedFile
 
 
 def generate(workbook: WorkbookData) -> List[GeneratedFile]:
-    entries = workbook.entries
+    entries = [entry for entry in workbook.entries if entry["edge"]]
 
     edge_c_lines = [
         '#include "modbus_reg_access_slave.h"',
