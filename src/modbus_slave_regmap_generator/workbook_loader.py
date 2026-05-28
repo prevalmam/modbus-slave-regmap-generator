@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from numbers import Integral, Real
 from typing import Dict, List
 
 import pandas as pd
@@ -29,15 +30,17 @@ class WorkbookData:
     nvm_total_size: int
     modbus_slave_addr: int
     busy_reject_keys: List[str]
+    warnings: List[str]
 
 
-def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
+def load_workbook_data(file_path: str) -> WorkbookData:
     """Read Excel workbook and normalize register entries."""
     reg_table_df = pd.read_excel(file_path, sheet_name="RegisterTable", header=None)
     lengthdefs_df = pd.read_excel(file_path, sheet_name="LengthDefs", header=None)
     config_df = pd.read_excel(file_path, sheet_name="Config", header=None)
 
     nvm_total_size = _read_config_int(config_df, "NVM_SIZE")
+    _validate_nvm_total_size(nvm_total_size)
     modbus_slave_addr = _read_config_int(config_df, "SLAVE_ADDR")
 
     length_defs: Dict[str, int] = {}
@@ -66,7 +69,7 @@ def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
                 (7, "Min"),
                 (8, "Max"),
                 (9, "Default"),
-                (10, "Persistent"),
+                (10, "NVM_Offset"),
                 (11, "EDGE"),
             ]
             for col_idx, expected in required_headers:
@@ -94,20 +97,22 @@ def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
         raise ValueError("RegisterTable header row (Reg_Addr) not found")
 
     entries: List[dict] = []
-    nvm_offset = base_nvm_offset
+    nvm_ranges: List[dict] = []
+    warnings: List[str] = []
 
     for i in range(header_row_index + 1, len(reg_table_df)):
         row = reg_table_df.iloc[i]
         if str(row[1]).strip().upper() == "EOF":
             break
-        columns = row[2:11]
-        if columns.isnull().any():
+        core_columns = row[2:10]
+        if core_columns.isnull().any():
             continue
 
         edge_flag = row.iloc[11] if len(row) > 11 else None
         edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
 
-        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef, persistent_flag = columns
+        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef = core_columns
+        nvm_offset_cell = row.iloc[10] if len(row) > 10 else None
         var_name = str(var_name).strip()
         var_type = str(var_type).strip()
         array_len = str(array_len).strip()
@@ -127,12 +132,18 @@ def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
         ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)
         ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
 
-        if _parse_bool_cell(persistent_flag, "Persistent", i + 1):
-            total_bytes = get_type_size(var_type) * count
-            current_offset = f"0x{nvm_offset:04X}U"
-            nvm_offset += total_bytes
-        else:
-            current_offset = "NVM_OFFSET_UNUSED"
+        type_size = get_type_size(var_type)
+        total_bytes = type_size * count
+        current_offset = _parse_nvm_offset_cell(
+            nvm_offset_cell,
+            row_number=i + 1,
+            var_name=var_name,
+            total_bytes=total_bytes,
+            type_size=type_size,
+            nvm_total_size=nvm_total_size,
+            nvm_ranges=nvm_ranges,
+            warnings=warnings,
+        )
 
         br_flags = {
             key: "1U" if str(row[col_idx]).strip().upper() == "TRUE" else "0U"
@@ -165,7 +176,13 @@ def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
         nvm_total_size=nvm_total_size,
         modbus_slave_addr=modbus_slave_addr,
         busy_reject_keys=list(br_cols.keys()),
+        warnings=warnings,
     )
+
+
+def _validate_nvm_total_size(nvm_total_size: int) -> None:
+    if nvm_total_size < 1 or nvm_total_size > 0xFFFF:
+        raise ValueError("Config NVM_SIZE must be between 1 and 65535.")
 
 
 def _read_config_int(config_df: pd.DataFrame, key_name: str) -> int:
@@ -194,6 +211,101 @@ def _parse_bool_cell(value, column_name: str, row_number: int) -> bool:
 
     raise ValueError(
         f"RegisterTable row {row_number}: {column_name} must be TRUE or FALSE, got '{value}'."
+    )
+
+
+def _parse_nvm_offset_cell(
+    value,
+    *,
+    row_number: int,
+    var_name: str,
+    total_bytes: int,
+    type_size: int,
+    nvm_total_size: int,
+    nvm_ranges: List[dict],
+    warnings: List[str],
+) -> str:
+    if pd.isna(value) or str(value).strip() == "":
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            "NVM_Offset is empty. Set '-' or an offset."
+        )
+
+    text = str(value).strip()
+    if text == "-":
+        return "NVM_OFFSET_UNUSED"
+
+    offset = _parse_nvm_offset_value(value, row_number, var_name)
+    end_offset = offset + total_bytes
+
+    if offset == nvm_total_size:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"NVM_Offset 0x{offset:04X} is reserved for NVM_OFFSET_UNUSED."
+        )
+    if end_offset > nvm_total_size:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: NVM range "
+            f"[0x{offset:04X}, 0x{end_offset:04X}) exceeds NVM_SIZE "
+            f"0x{nvm_total_size:04X}."
+        )
+
+    for existing in nvm_ranges:
+        if offset < existing["end"] and existing["start"] < end_offset:
+            raise ValueError(
+                f"RegisterTable row {row_number} {var_name}: NVM range overlaps "
+                f"with row {existing['row']} {existing['name']}.\n"
+                f"  row {row_number} {var_name}: "
+                f"[0x{offset:04X}, 0x{end_offset:04X})\n"
+                f"  row {existing['row']} {existing['name']}: "
+                f"[0x{existing['start']:04X}, 0x{existing['end']:04X})"
+            )
+
+    if type_size > 1 and offset % type_size != 0:
+        warnings.append(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"NVM_Offset 0x{offset:04X} is not aligned to {type_size} bytes."
+        )
+
+    nvm_ranges.append(
+        {
+            "row": row_number,
+            "name": var_name,
+            "start": offset,
+            "end": end_offset,
+        }
+    )
+    return f"0x{offset:04X}U"
+
+
+def _parse_nvm_offset_value(value, row_number: int, var_name: str) -> int:
+    if isinstance(value, bool):
+        _raise_invalid_nvm_offset(value, row_number, var_name)
+
+    if isinstance(value, Integral):
+        offset = int(value)
+    elif isinstance(value, Real) and not isinstance(value, bool):
+        if not float(value).is_integer():
+            _raise_invalid_nvm_offset(value, row_number, var_name)
+        offset = int(value)
+    else:
+        text = str(value).strip()
+        if re.fullmatch(r"0[xX][0-9A-Fa-f]+", text):
+            offset = int(text, 16)
+        elif re.fullmatch(r"[0-9]+", text):
+            offset = int(text, 10)
+        else:
+            _raise_invalid_nvm_offset(value, row_number, var_name)
+
+    if offset < 0:
+        _raise_invalid_nvm_offset(value, row_number, var_name)
+    return offset
+
+
+def _raise_invalid_nvm_offset(value, row_number: int, var_name: str) -> None:
+    raise ValueError(
+        f"RegisterTable row {row_number} {var_name}: "
+        f"NVM_Offset must be '-' or a decimal/0x-prefixed hexadecimal offset, got '{value}'."
     )
 
 

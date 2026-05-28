@@ -143,7 +143,7 @@ void modbus_sender_output(const uint8_t *data, uint16_t len)
 
 ### 4.2 NVMドライバ差し込み
 
-受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `Persistent` 列を `TRUE` にしたエントリについて `NVM_Request_Write_Bytes()` を必ず呼び出します。`Persistent` を `TRUE` にした順に、`BASE_NVM_OFFSET`（デフォルト `0x0002`）から自動採番したオフセットが割り当てられます。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
+受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `NVM_Offset` にオフセットを指定したエントリについて `NVM_Request_Write_Bytes()` を呼び出します。`NVM_Offset` は NVM 領域先頭からのバイトオフセットで、物理番地そのものではありません。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
 
 ```c
 extern void NVM_Request_Write_Bytes(uint16_t offset,
@@ -153,7 +153,7 @@ extern void NVM_Request_Write_Bytes(uint16_t offset,
 
 実装時のポイント:
 
-1. `offset` は NVM 領域先頭からのバイトオフセットです。RegisterTable で `Persistent=TRUE` を付けたエントリ順に `BASE_NVM_OFFSET`（[main.py](src/modbus_slave_regmap_generator/main.py#L17)）から加算されます。異なる開始番地を使いたい場合は、この定数を変更してください。
+1. `offset` は NVM 領域先頭からのバイトオフセットです。RegisterTable の `NVM_Offset` に `0x0000`、`0x0004`、`16` のように明示指定します。NVM に保存しないエントリは `NVM_Offset` に `-` を指定します。
 2. `data` はレジスタ 1 ブロック分のシリアル化済みバイト列です。
 3. `length` は書き込む総バイト数です。
 
@@ -267,7 +267,7 @@ void update_device_mode(uint16_t new_value)
 - レジスタ値の展開
 - Min/Max チェック
 - RAM（g_reg_table_slave[]）への反映
-- NVM 書き込み要求（Persistent 列が TRUE の場合）
+- NVM 書き込み要求（NVM_Offset にオフセットを指定した場合）
 
 ---
 
@@ -338,10 +338,10 @@ void update_device_mode(uint16_t new_value)
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
-| `Persistent` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタは NVM に保存される |
+| `NVM_Offset` | `-` / `0x0000` / `16` | `-` の場合は NVM に保存しない。数値の場合は NVM 領域先頭からのバイトオフセット |
 | `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
 
-![入力 Excel のフォーマット例](images/format.png)
+`NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 
@@ -359,7 +359,7 @@ void update_device_mode(uint16_t new_value)
 
 #### 5.1.3.Config シート
 
-標準フォーマットでは C5セルに `NVM_SIZE`、D5セルに NVM 領域のサイズ（10進数）を指定します。
+標準フォーマットでは C5セルに `NVM_SIZE`、D5セルに NVM 領域のサイズ（10進数）を指定します。`NVM_SIZE` は `NVM_Offset` の範囲チェックと、生成コード上の未使用値 `NVM_OFFSET_UNUSED` の定義に使われます。指定可能な範囲は `1` から `65535` です。
 
 標準フォーマットでは C6セルに `SLAVE_ADDR`、D6セルに Modbus スレーブアドレス（10進数）を指定します。
 
