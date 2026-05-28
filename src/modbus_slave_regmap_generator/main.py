@@ -13,7 +13,7 @@ from modbus_slave_regmap_generator.generators import parser, reg_access, reg_edg
 from modbus_slave_regmap_generator.workbook_loader import load_workbook_data
 from modbus_slave_regmap_generator.writer import write_generated_files
 
-BASE_FRAM_OFFSET = 0x0002
+BASE_NVM_OFFSET = 0x0002
 
 
 def main() -> None:
@@ -25,7 +25,7 @@ def main() -> None:
         return
 
     try:
-        workbook = load_workbook_data(file_path, BASE_FRAM_OFFSET)
+        workbook = load_workbook_data(file_path, BASE_NVM_OFFSET)
 
         generated_files: List[GeneratedFile] = []
         generated_files.extend(reg_map.generate(workbook))

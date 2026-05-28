@@ -20,9 +20,9 @@ MODBUS_PARSER_HEADER = """\
 
 #define MODBUS_EXC_SLAVE_DEVICE_BUSY  0x06U
 
-extern void FRAM_Request_Write_Bytes(uint16_t offset,
-                                       const uint8_t *data,
-                                       uint16_t length);
+extern void NVM_Request_Write_Bytes(uint16_t offset,
+                                    const uint8_t *data,
+                                    uint16_t length);
 
 extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
 
@@ -495,10 +495,10 @@ int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *dat
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(uint16_t)));
 
-        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        if (entry->nvm_offset != NVM_OFFSET_UNUSED)
         {
-            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
-                                     (uint16_t)(len * sizeof(uint16_t)));
+            NVM_Request_Write_Bytes(entry->nvm_offset, temp_buf,
+                                    (uint16_t)(len * sizeof(uint16_t)));
         }
     }
 
@@ -567,10 +567,10 @@ int handle_write_uint32_entry(const reg_table_entry_t *entry, const uint8_t *dat
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(uint32_t)));
 
-        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        if (entry->nvm_offset != NVM_OFFSET_UNUSED)
         {
-            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
-                                     (uint16_t)(len * sizeof(uint32_t)));
+            NVM_Request_Write_Bytes(entry->nvm_offset, temp_buf,
+                                    (uint16_t)(len * sizeof(uint32_t)));
         }
     }
 
@@ -643,10 +643,10 @@ int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data
     {
         (void)memcpy((void *)entry->ram_ptr, temp_buf, (size_t)(len * sizeof(float)));
 
-        if (entry->fram_offset != FRAM_OFFSET_UNUSED)
+        if (entry->nvm_offset != NVM_OFFSET_UNUSED)
         {
-            FRAM_Request_Write_Bytes(entry->fram_offset, temp_buf,
-                                     (uint16_t)(len * sizeof(float)));
+            NVM_Request_Write_Bytes(entry->nvm_offset, temp_buf,
+                                    (uint16_t)(len * sizeof(float)));
         }
     }
 

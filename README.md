@@ -105,10 +105,10 @@ msrg
 生成されたコードは、以下のステップで使用します。
 
 1. 送信ドライバ差し込み（`modbus_sender_output` 実装）
-2. FRAMドライバ差し込み
+2. NVMドライバ差し込み
 3. 初期化（エッジ検出関数の初期化）
 4. 送信処理（read/write リクエストを送る）
-5. 受信処理（応答フレームを受信し、パースし、(F)RAM 反映）
+5. 受信処理（応答フレームを受信し、パースし、NVM 反映）
 6. 値の参照・更新（getter/setter でアプリ側からアクセス）
 7. エッジ検出（値の変化を検出し、アプリイベントとして処理）
 ---
@@ -141,28 +141,28 @@ void modbus_sender_output(const uint8_t *data, uint16_t len)
 
 このフックを埋めておけば、以降の送信 API（read/write リクエスト）はすべて生成コードだけで完結します。
 
-### 4.2 FRAMドライバ差し込み
+### 4.2 NVMドライバ差し込み
 
-受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `FRAM` 列を `TRUE` にしたエントリについて `FRAM_Request_Write_Bytes()` を必ず呼び出します。`FRAM` を `TRUE` にした順に、`BASE_FRAM_OFFSET`（デフォルト `0x0002`）から自動採番したオフセットが割り当てられます。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の FRAM／EEPROM ドライバをプロジェクト側で実装してください。
+受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `Persistent` 列を `TRUE` にしたエントリについて `NVM_Request_Write_Bytes()` を必ず呼び出します。`Persistent` を `TRUE` にした順に、`BASE_NVM_OFFSET`（デフォルト `0x0002`）から自動採番したオフセットが割り当てられます。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
 
 ```c
-extern void FRAM_Request_Write_Bytes(uint16_t offset,
-                                     const uint8_t *data,
-                                     uint16_t length);
+extern void NVM_Request_Write_Bytes(uint16_t offset,
+                                    const uint8_t *data,
+                                    uint16_t length);
 ```
 
 実装時のポイント:
 
-1. `offset` は FRAM 先頭からのバイトオフセットです。RegisterTable で `FRAM=TRUE` を付けたエントリ順に `BASE_FRAM_OFFSET`（[main.py](src/modbus_slave_regmap_generator/main.py#L17)）から加算されます。異なる開始番地を使いたい場合は、この定数を変更してください。
+1. `offset` は NVM 領域先頭からのバイトオフセットです。RegisterTable で `Persistent=TRUE` を付けたエントリ順に `BASE_NVM_OFFSET`（[main.py](src/modbus_slave_regmap_generator/main.py#L17)）から加算されます。異なる開始番地を使いたい場合は、この定数を変更してください。
 2. `data` はレジスタ 1 ブロック分のシリアル化済みバイト列です。
 3. `length` は書き込む総バイト数です。
 
 例えば I2C 接続の FRAM へブロック書き込みする場合:
 
 ```c
-void FRAM_Request_Write_Bytes(uint16_t offset,
-                              const uint8_t *data,
-                              uint16_t length)
+void NVM_Request_Write_Bytes(uint16_t offset,
+                             const uint8_t *data,
+                             uint16_t length)
 {
     fram_lock_bus();
     fram_begin_transaction();
@@ -172,12 +172,12 @@ void FRAM_Request_Write_Bytes(uint16_t offset,
 }
 ```
 
-もしプロジェクトで FRAMを使わない場合でも、リンカエラーを防ぐためにシグネチャどおりのスタブだけは用意してください。スタブ内で全引数を `(void)` キャストしておけば未使用警告も抑止できます。
+もしプロジェクトで NVM 書き込みを使わない場合でも、リンカエラーを防ぐためにシグネチャどおりのスタブだけは用意してください。スタブ内で全引数を `(void)` キャストしておけば未使用警告も抑止できます。
 
 ```c
-void FRAM_Request_Write_Bytes(uint16_t offset,
-                              const uint8_t *data,
-                              uint16_t length)
+void NVM_Request_Write_Bytes(uint16_t offset,
+                             const uint8_t *data,
+                             uint16_t length)
 {
     (void)offset;
     (void)data;
@@ -190,7 +190,7 @@ void FRAM_Request_Write_Bytes(uint16_t offset,
 
 起動時に行うべき初期処理は次の 2 ステップに集約されます。
 
-1. **RAM の実値を `g_reg_table_slave` 経由でセットする** — FRAM/EEPROM/別ストレージからの復元あるいはデフォルト値の適用を、生成済み getter/setter ではなく `g_reg_table_slave` の `ram_ptr` と `size` を使って一括処理するのが最も手軽でミスがありません。永続領域のデータがない場合は、`default_value` をコピーするだけで RAM が仕様書どおりに初期化されます。
+1. **RAM の実値を `g_reg_table_slave` 経由でセットする** — NVM/別ストレージからの復元あるいはデフォルト値の適用を、生成済み getter/setter ではなく `g_reg_table_slave` の `ram_ptr` と `size` を使って一括処理するのが最も手軽でミスがありません。永続領域のデータがない場合は、`default_value` をコピーするだけで RAM が仕様書どおりに初期化されます。
 
     ```c
     static void load_reg_defaults(void)
@@ -252,7 +252,7 @@ void update_device_mode(uint16_t new_value)
 
 ---
 
-### 4.5 受信処理とパースと(F)RAM 反映
+### 4.5 受信処理とパースと NVM 反映
 
 応答フレームを受信したら、reply_handler に渡すだけで完了します。
 
@@ -267,7 +267,7 @@ void update_device_mode(uint16_t new_value)
 - レジスタ値の展開
 - Min/Max チェック
 - RAM（g_reg_table_slave[]）への反映
-- FRAM 書き込み要求（FRAM 列が TRUE の場合）
+- NVM 書き込み要求（Persistent 列が TRUE の場合）
 
 ---
 
@@ -338,7 +338,7 @@ void update_device_mode(uint16_t new_value)
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
-| `FRAM` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタは FRAM/EEPROM に保存される |
+| `Persistent` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタは NVM に保存される |
 | `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
 
 ![入力 Excel のフォーマット例](images/format.png)
@@ -359,9 +359,9 @@ void update_device_mode(uint16_t new_value)
 
 #### 5.1.3.Config シート
 
-D5セルに FRAMのサイズ（10進数）を指定します。
+標準フォーマットでは C5セルに `NVM_SIZE`、D5セルに NVM 領域のサイズ（10進数）を指定します。
 
-D6セルに Modbus スレーブアドレス（10進数）を指定します。
+標準フォーマットでは C6セルに `SLAVE_ADDR`、D6セルに Modbus スレーブアドレス（10進数）を指定します。
 
 ![Config シートの例](images/format_Config.png)
 

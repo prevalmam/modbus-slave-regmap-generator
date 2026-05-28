@@ -26,31 +26,19 @@ except ImportError:  # pragma: no cover - fallback when running as a script
 class WorkbookData:
     entries: List[dict]
     length_defs: Dict[str, int]
-    fram_total_size: int
+    nvm_total_size: int
     modbus_slave_addr: int
     busy_reject_keys: List[str]
 
 
-def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
+def load_workbook_data(file_path: str, base_nvm_offset: int) -> WorkbookData:
     """Read Excel workbook and normalize register entries."""
     reg_table_df = pd.read_excel(file_path, sheet_name="RegisterTable", header=None)
     lengthdefs_df = pd.read_excel(file_path, sheet_name="LengthDefs", header=None)
     config_df = pd.read_excel(file_path, sheet_name="Config", header=None)
 
-    fram_total_size = int(config_df.iloc[4, 3])
-
-    modbus_slave_addr = None
-    for _, row in config_df.iloc[4:].iterrows():  # start scan at Config!C5
-        key = str(row[2]).strip().upper()
-        if key == "SLAVE_ADDR":
-            try:
-                modbus_slave_addr = int(row[3])
-            except (TypeError, ValueError) as exc:  # pragma: no cover - invalid Excel value
-                raise ValueError("Config!D column SLAVE_ADDR must be an integer") from exc
-            break
-
-    if modbus_slave_addr is None:
-        raise ValueError("Config!C column does not contain SLAVE_ADDR entry")
+    nvm_total_size = _read_config_int(config_df, "NVM_SIZE")
+    modbus_slave_addr = _read_config_int(config_df, "SLAVE_ADDR")
 
     length_defs: Dict[str, int] = {}
     for _, row in lengthdefs_df.iterrows():
@@ -78,7 +66,7 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
                 (7, "Min"),
                 (8, "Max"),
                 (9, "Default"),
-                (10, "FRAM"),
+                (10, "Persistent"),
                 (11, "EDGE"),
             ]
             for col_idx, expected in required_headers:
@@ -106,7 +94,7 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         raise ValueError("RegisterTable header row (Reg_Addr) not found")
 
     entries: List[dict] = []
-    fram_offset = base_fram_offset
+    nvm_offset = base_nvm_offset
 
     for i in range(header_row_index + 1, len(reg_table_df)):
         row = reg_table_df.iloc[i]
@@ -119,7 +107,7 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         edge_flag = row.iloc[11] if len(row) > 11 else None
         edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
 
-        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef, fram_flag = columns
+        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef, persistent_flag = columns
         var_name = str(var_name).strip()
         var_type = str(var_type).strip()
         array_len = str(array_len).strip()
@@ -139,12 +127,12 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
         ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)
         ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
 
-        if str(fram_flag).strip().upper() == "TRUE":
+        if _parse_bool_cell(persistent_flag, "Persistent", i + 1):
             total_bytes = get_type_size(var_type) * count
-            current_offset = f"0x{fram_offset:04X}U"
-            fram_offset += total_bytes
+            current_offset = f"0x{nvm_offset:04X}U"
+            nvm_offset += total_bytes
         else:
-            current_offset = "FRAM_OFFSET_UNUSED"
+            current_offset = "NVM_OFFSET_UNUSED"
 
         br_flags = {
             key: "1U" if str(row[col_idx]).strip().upper() == "TRUE" else "0U"
@@ -155,7 +143,7 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
             {
                 "name": var_name,
                 "modbus_addr": int(reg_addr),
-                "fram_offset": current_offset,
+                "nvm_offset": current_offset,
                 "size": size_expr,
                 "default_value": cast_struct_value(var_type, vdef, "default"),
                 "min_value": cast_struct_value(var_type, vmin, "min"),
@@ -174,10 +162,22 @@ def load_workbook_data(file_path: str, base_fram_offset: int) -> WorkbookData:
     return WorkbookData(
         entries=entries,
         length_defs=length_defs,
-        fram_total_size=fram_total_size,
+        nvm_total_size=nvm_total_size,
         modbus_slave_addr=modbus_slave_addr,
         busy_reject_keys=list(br_cols.keys()),
     )
+
+
+def _read_config_int(config_df: pd.DataFrame, key_name: str) -> int:
+    for _, row in config_df.iloc[4:].iterrows():  # start scan at Config!C5
+        key = str(row[2]).strip().upper()
+        if key == key_name:
+            try:
+                return int(row[3])
+            except (TypeError, ValueError) as exc:  # pragma: no cover - invalid Excel value
+                raise ValueError(f"Config!D column {key_name} must be an integer") from exc
+
+    raise ValueError(f"Config!C column does not contain {key_name} entry")
 
 
 def _parse_bool_cell(value, column_name: str, row_number: int) -> bool:

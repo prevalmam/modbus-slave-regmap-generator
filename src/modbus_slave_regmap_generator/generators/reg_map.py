@@ -12,7 +12,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     """Generate modbus_reg_map.[ch] contents."""
     entries = workbook.entries
     length_defs = workbook.length_defs
-    fram_total_size = workbook.fram_total_size
+    nvm_total_size = workbook.nvm_total_size
 
     h_text = textwrap.dedent(
         """\
@@ -29,10 +29,10 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
     h_text += textwrap.dedent(
         f"""
-        /* FRAM size and unused offset */
-        #define FRAM_TOTAL_SIZE     ({fram_total_size}U)
-        #define FRAM_MAX_OFFSET     (FRAM_TOTAL_SIZE - 1U)
-        #define FRAM_OFFSET_UNUSED  (FRAM_TOTAL_SIZE)
+        /* NVM size and unused offset */
+        #define NVM_TOTAL_SIZE     ({nvm_total_size}U)
+        #define NVM_MAX_OFFSET     (NVM_TOTAL_SIZE - 1U)
+        #define NVM_OFFSET_UNUSED  (NVM_TOTAL_SIZE)
 
         typedef enum {{
             REG_TYPE_UINT16,
@@ -52,7 +52,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         typedef struct {{
             const char * name;
             uint16_t     modbus_addr;
-            uint16_t     fram_offset;
+            uint16_t     nvm_offset;
             uint16_t     size;
             const void * default_value;
             const void * min_value;
@@ -103,7 +103,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += "    {\n"
         c_text += f"        \"{entry['name']}\",\n"
         c_text += f"        {entry['modbus_addr']},\n"
-        c_text += f"        {entry['fram_offset']},\n"
+        c_text += f"        {entry['nvm_offset']},\n"
         c_text += f"        {entry['size']},\n"
         c_text += f"        default_{entry['name']},\n"
         c_text += f"        min_{entry['name']},\n"
