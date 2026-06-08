@@ -52,7 +52,19 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         '#include "modbus_reg_map_slave.h"',
         '#include "modbus_reg_idx_slave.h"',
         "",
+        "extern void NVM_Request_Write_Bytes(uint16_t offset,",
+        "                                    const uint8_t *data,",
+        "                                    uint16_t length);",
+        "",
         "/* Access function implementations */",
+        "",
+        "static void write_nvm_if_used(uint16_t offset, const void *data, uint16_t length)",
+        "{",
+        "    if (offset != NVM_OFFSET_UNUSED)",
+        "    {",
+        "        NVM_Request_Write_Bytes(offset, (const uint8_t *)data, length);",
+        "    }",
+        "}",
         "",
     ]
 
@@ -110,22 +122,50 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("{")
             access_c_lines.append(f"    const {base_type} min = {read_func}({entry_ref}.min_value);")
             access_c_lines.append(f"    const {base_type} max = {read_func}({entry_ref}.max_value);")
+            access_c_lines.append(f"    {base_type} * const ram = ({base_type} *)({entry_ref}.ram_ptr);")
+            access_c_lines.append(f"    {base_type} current;")
+            access_c_lines.append("    uint16_t nvm_offset;")
             access_c_lines.append(f"    if (index >= {entry['length']}U) {{ return 0; }}")
         else:
             access_c_lines.append(f"int set_{name}({base_type} value)")
             access_c_lines.append("{")
             access_c_lines.append(f"    const {base_type} min = {read_func}({entry_ref}.min_value);")
             access_c_lines.append(f"    const {base_type} max = {read_func}({entry_ref}.max_value);")
+            access_c_lines.append(f"    const {base_type} current = {read_func}({entry_ref}.ram_ptr);")
 
         access_c_lines.append("    if ((value < min) || (value > max))")
         access_c_lines.append("    {")
         access_c_lines.append("        return 0;")
         access_c_lines.append("    }")
+        access_c_lines.append("")
 
         if is_array:
-            access_c_lines.append(f"    (({base_type} *)({entry_ref}.ram_ptr))[index] = value;")
+            access_c_lines.append("    current = ram[index];")
+
+        access_c_lines.append("    if (value == current)")
+        access_c_lines.append("    {")
+        access_c_lines.append("        return 1;")
+        access_c_lines.append("    }")
+
+        if is_array:
+            access_c_lines.append("    ram[index] = value;")
+            access_c_lines.append(f"    if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
+            access_c_lines.append("    {")
+            access_c_lines.append(
+                f"        nvm_offset = (uint16_t)({entry_ref}.nvm_offset + "
+                f"(uint16_t)(index * sizeof({base_type})));"
+            )
+            access_c_lines.append(
+                "        write_nvm_if_used(nvm_offset, &ram[index], "
+                "(uint16_t)sizeof(value));"
+            )
+            access_c_lines.append("    }")
         else:
             access_c_lines.append(f"    {write_func}({entry_ref}.ram_ptr, value);")
+            access_c_lines.append(
+                f"    write_nvm_if_used({entry_ref}.nvm_offset, {entry_ref}.ram_ptr, "
+                "(uint16_t)sizeof(value));"
+            )
 
         access_c_lines.append("    return 1;")
         access_c_lines.append("}")

@@ -143,7 +143,7 @@ void modbus_sender_output(const uint8_t *data, uint16_t len)
 
 ### 4.2 NVMドライバ差し込み
 
-受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `NVM_Offset` にオフセットを指定したエントリについて `NVM_Request_Write_Bytes()` を呼び出します。`NVM_Offset` は NVM 領域先頭からのバイトオフセットで、物理番地そのものではありません。`modbus_parser.h` には次の extern だけが自動生成されるため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
+受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `NVM_Offset` にオフセットを指定したエントリについて `NVM_Request_Write_Bytes()` を呼び出します。アプリ側から `set_xxx()` で値を更新した場合も、同じく `NVM_Offset` が有効なエントリは NVM に反映されます。`NVM_Offset` は NVM 領域先頭からのバイトオフセットで、物理番地そのものではありません。生成コードは次の外部関数を呼び出すため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
 
 ```c
 extern void NVM_Request_Write_Bytes(uint16_t offset,
@@ -154,7 +154,7 @@ extern void NVM_Request_Write_Bytes(uint16_t offset,
 実装時のポイント:
 
 1. `offset` は NVM 領域先頭からのバイトオフセットです。RegisterTable の `NVM_Offset` に `0x0000`、`0x0004`、`16` のように明示指定します。NVM に保存しないエントリは `NVM_Offset` に `-` を指定します。
-2. `data` はレジスタ 1 ブロック分のシリアル化済みバイト列です。
+2. `data` は RAM 上の値をバイト列として見たものです。setter では 1 要素分、Modbus Write 受信では対象ブロック分が渡されます。
 3. `length` は書き込む総バイト数です。
 
 例えば I2C 接続の FRAM へブロック書き込みする場合:
@@ -267,7 +267,7 @@ void update_device_mode(uint16_t new_value)
 - レジスタ値の展開
 - Min/Max チェック
 - RAM（g_reg_table_slave[]）への反映
-- NVM 書き込み要求（NVM_Offset にオフセットを指定した場合）
+- NVM 書き込み要求（値が変化し、NVM_Offset にオフセットを指定した場合）
 
 ---
 
@@ -283,7 +283,7 @@ void update_device_mode(uint16_t new_value)
     set_device_mode(2);
     set_process_value(36.5f);
 
-なお、setter は min/max チェックを自動で行います。 範囲外の値をセットしようとした場合は何も変更されません。
+setter は min/max チェックを自動で行います。範囲外の値をセットしようとした場合は何も変更されません。値が現在値と異なる場合は RAM を更新し、`NVM_Offset` が有効なエントリでは `NVM_Request_Write_Bytes()` で NVM にも反映します。同じ値をセットした場合は成功扱いで戻りますが、RAM/NVM への書き込みは行いません。
 
 #### 4.6.3 下限値・上限値の取得
 
