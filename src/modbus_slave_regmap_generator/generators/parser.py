@@ -71,6 +71,7 @@ static int check_range_uint32(uint32_t val, uint32_t min, uint32_t max);
 static int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
 static int handle_write_uint32_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
 static int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
+static int handle_write_string_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);
 
 static void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8_t *value);
 
@@ -197,6 +198,14 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
                     *p++ = (uint8_t)((u32f.u >> 16) & 0xFF);
                     *p++ = (uint8_t)((u32f.u >> 8) & 0xFF);
                     *p++ = (uint8_t)(u32f.u & 0xFF);
+                }
+                break;
+
+            case REG_TYPE_STRING:
+                for (j = 0U; j < entry->length; j = (uint16_t)(j + 2U))
+                {
+                    *p++ = src[j];
+                    *p++ = src[j + 1U];
                 }
                 break;
 
@@ -425,6 +434,10 @@ int handle_modbus_multi_write(uint16_t start_addr, uint16_t num_regs, const uint
                 status = handle_write_float_entry(entry, entry_data, entry->length);
                 break;
 
+            case REG_TYPE_STRING:
+                status = handle_write_string_entry(entry, entry_data, entry->length);
+                break;
+
             default:
                 status = -1;
                 break;
@@ -647,6 +660,91 @@ int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data
         {
             NVM_Request_Write_Bytes(entry->nvm_offset, temp_buf,
                                     (uint16_t)(len * sizeof(float)));
+        }
+    }
+
+    return is_all_valid ? 0 : -1;
+}
+
+int handle_write_string_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len)
+{
+    uint16_t i;
+    int is_valid_ptr = 1;
+    int is_valid_len = 1;
+    int is_valid_buf = 1;
+    int is_valid_data = 1;
+    int found_nul = 0;
+    int need_write = 0;
+    uint8_t ch;
+    uint8_t temp_buf[256];
+
+    int is_all_valid = 0;
+
+    if ((entry == (const reg_table_entry_t *)0) || (data == (const uint8_t *)0))
+    {
+        is_valid_ptr = 0;
+    }
+    if ((entry != (const reg_table_entry_t *)0) && (len != entry->length))
+    {
+        is_valid_len = 0;
+    }
+    if (len > sizeof(temp_buf))
+    {
+        is_valid_buf = 0;
+    }
+
+    if ((is_valid_ptr != 0) && (is_valid_len != 0) && (is_valid_buf != 0))
+    {
+        for (i = 0U; i < len; ++i)
+        {
+            ch = data[i];
+            temp_buf[i] = ch;
+
+            if (found_nul != 0)
+            {
+                if (ch != 0U)
+                {
+                    is_valid_data = 0;
+                }
+            }
+            else if (ch == 0U)
+            {
+                found_nul = 1;
+            }
+            else if ((ch < 0x20U) || (ch > 0x7EU))
+            {
+                is_valid_data = 0;
+            }
+            else
+            {
+                /* ASCII printable character. */
+            }
+        }
+    }
+
+    if (found_nul == 0)
+    {
+        is_valid_data = 0;
+    }
+
+    is_all_valid = (is_valid_ptr != 0) && (is_valid_len != 0) &&
+                   (is_valid_buf != 0) && (is_valid_data != 0);
+
+    if (is_all_valid != 0)
+    {
+        if (memcmp(entry->ram_ptr, temp_buf, len) != 0)
+        {
+            need_write = 1;
+        }
+    }
+
+    if (is_all_valid && (need_write != 0))
+    {
+        (void)memcpy((void *)entry->ram_ptr, temp_buf, len);
+
+        if (entry->nvm_offset != NVM_OFFSET_UNUSED)
+        {
+            NVM_Request_Write_Bytes(entry->nvm_offset, temp_buf, len);
         }
     }
 

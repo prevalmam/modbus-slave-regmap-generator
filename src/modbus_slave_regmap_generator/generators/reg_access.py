@@ -11,9 +11,14 @@ def _collect_used_types(entries) -> Set[str]:
     return {entry["var_type_str"] for entry in entries}
 
 
+def _is_string_entry(entry) -> bool:
+    return entry["type"] == "REG_TYPE_STRING"
+
+
 def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     entries = workbook.entries
     used_types = _collect_used_types(entries)
+    has_string = any(_is_string_entry(entry) for entry in entries)
 
     access_lines = [
         "#ifndef MODBUS_REG_ACCESS_SLAVE_H",
@@ -26,6 +31,15 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
     for entry in entries:
         base_name = entry["name"]
+        if _is_string_entry(entry):
+            access_lines.append(f"const char *get_{base_name}(void);")
+            access_lines.append(
+                f"int get_{base_name}_copy(char *dst, uint16_t dst_size);"
+            )
+            access_lines.append(f"int set_{base_name}(const char *value);")
+            access_lines.append("")
+            continue
+
         base_type = get_base_type(entry["type"])
         is_array = entry["length"] > 1
 
@@ -51,6 +65,11 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         '#include "modbus_reg_access_slave.h"',
         '#include "modbus_reg_map_slave.h"',
         '#include "modbus_reg_idx_slave.h"',
+    ]
+    if has_string:
+        access_c_lines.append("#include <string.h>")
+    access_c_lines.extend(
+        [
         "",
         "extern void NVM_Request_Write_Bytes(uint16_t offset,",
         "                                    const uint8_t *data,",
@@ -66,7 +85,56 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         "    }",
         "}",
         "",
-    ]
+        ]
+    )
+
+    if has_string:
+        access_c_lines.extend(
+            [
+                "static uint16_t string_length_limited(const char *value, uint16_t max_size)",
+                "{",
+                "    uint16_t len = 0U;",
+                "",
+                "    if (value == (const char *)0)",
+                "    {",
+                "        return max_size;",
+                "    }",
+                "",
+                "    while ((len < max_size) && (value[len] != '\\0'))",
+                "    {",
+                "        ++len;",
+                "    }",
+                "    return len;",
+                "}",
+                "",
+                "static int is_valid_string_value(const char *value, uint16_t buffer_size)",
+                "{",
+                "    uint16_t i;",
+                "    unsigned char ch;",
+                "",
+                "    if ((value == (const char *)0) || (buffer_size == 0U))",
+                "    {",
+                "        return 0;",
+                "    }",
+                "",
+                "    for (i = 0U; i < buffer_size; ++i)",
+                "    {",
+                "        ch = (unsigned char)value[i];",
+                "        if (ch == '\\0')",
+                "        {",
+                "            return 1;",
+                "        }",
+                "        if ((ch < 0x20U) || (ch > 0x7EU))",
+                "        {",
+                "            return 0;",
+                "        }",
+                "    }",
+                "",
+                "    return 0;",
+                "}",
+                "",
+            ]
+        )
 
     if "uint16_t" in used_types:
         access_c_lines.extend(
@@ -95,6 +163,65 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
     for entry in entries:
         name = entry["name"]
+        if _is_string_entry(entry):
+            idx_macro = f"MODBUS_IDX_{name}"
+            entry_ref = f"g_reg_table_slave[{idx_macro}]"
+            length = entry["length"]
+
+            access_c_lines.append(f"const char *get_{name}(void)")
+            access_c_lines.append("{")
+            access_c_lines.append(f"    return (const char *)({entry_ref}.ram_ptr);")
+            access_c_lines.append("}")
+            access_c_lines.append("")
+
+            access_c_lines.append(f"int get_{name}_copy(char *dst, uint16_t dst_size)")
+            access_c_lines.append("{")
+            access_c_lines.append(f"    const char *src = (const char *)({entry_ref}.ram_ptr);")
+            access_c_lines.append(
+                f"    const uint16_t len = string_length_limited(src, {length}U);"
+            )
+            access_c_lines.append("")
+            access_c_lines.append("    if ((dst == (char *)0) || (dst_size <= len))")
+            access_c_lines.append("    {")
+            access_c_lines.append("        return 0;")
+            access_c_lines.append("    }")
+            access_c_lines.append("")
+            access_c_lines.append("    (void)memcpy(dst, src, len);")
+            access_c_lines.append("    dst[len] = '\\0';")
+            access_c_lines.append("    return 1;")
+            access_c_lines.append("}")
+            access_c_lines.append("")
+
+            access_c_lines.append(f"int set_{name}(const char *value)")
+            access_c_lines.append("{")
+            access_c_lines.append(f"    char temp[{length}];")
+            access_c_lines.append(f"    char * const ram = (char *)({entry_ref}.ram_ptr);")
+            access_c_lines.append(
+                f"    const uint16_t len = string_length_limited(value, {length}U);"
+            )
+            access_c_lines.append("")
+            access_c_lines.append(f"    if (is_valid_string_value(value, {length}U) == 0)")
+            access_c_lines.append("    {")
+            access_c_lines.append("        return 0;")
+            access_c_lines.append("    }")
+            access_c_lines.append("")
+            access_c_lines.append("    (void)memset(temp, 0, sizeof(temp));")
+            access_c_lines.append("    (void)memcpy(temp, value, len);")
+            access_c_lines.append("")
+            access_c_lines.append("    if (memcmp(ram, temp, sizeof(temp)) == 0)")
+            access_c_lines.append("    {")
+            access_c_lines.append("        return 1;")
+            access_c_lines.append("    }")
+            access_c_lines.append("")
+            access_c_lines.append("    (void)memcpy(ram, temp, sizeof(temp));")
+            access_c_lines.append(
+                f"    write_nvm_if_used({entry_ref}.nvm_offset, ram, (uint16_t)sizeof(temp));"
+            )
+            access_c_lines.append("    return 1;")
+            access_c_lines.append("}")
+            access_c_lines.append("")
+            continue
+
         base_type = get_base_type(entry["type"])
         read_func = get_read_func(entry["type"])
         write_func = get_write_func(entry["type"])

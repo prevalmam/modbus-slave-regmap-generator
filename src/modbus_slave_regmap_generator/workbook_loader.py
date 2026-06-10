@@ -10,16 +10,20 @@ try:
         cast_struct_value,
         generate_static_definition,
         get_type_size,
+        is_string_type,
         map_access,
         map_type,
+        normalize_type,
     )
 except ImportError:  # pragma: no cover - fallback when running as a script
     from utils import (  # type: ignore
         cast_struct_value,
         generate_static_definition,
         get_type_size,
+        is_string_type,
         map_access,
         map_type,
+        normalize_type,
     )
 
 
@@ -105,7 +109,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         if str(row[1]).strip().upper() == "EOF":
             break
         core_columns = row[2:10]
-        if core_columns.isnull().any():
+        if core_columns.isnull().all():
             continue
 
         edge_flag = row.iloc[11] if len(row) > 11 else None
@@ -113,10 +117,14 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
         reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef = core_columns
         nvm_offset_cell = row.iloc[10] if len(row) > 10 else None
+        if any(pd.isna(value) for value in (reg_addr, var_name, var_type, array_len, access)):
+            continue
+
         var_name = str(var_name).strip()
-        var_type = str(var_type).strip()
+        var_type = normalize_type(str(var_type).strip())
         array_len = str(array_len).strip()
         access = str(access).strip()
+        string_type = is_string_type(var_type)
 
         is_array = True
         try:
@@ -127,10 +135,28 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 continue
             count = length_defs[array_len]
 
-        size_expr = f"sizeof({var_type}) * {array_len}" if is_array else f"sizeof({var_type})"
-        vdef_str = str(vdef).strip() if pd.notna(vdef) else "0"
+        if string_type:
+            _validate_string_entry(
+                row_number=i + 1,
+                var_name=var_name,
+                array_len=count,
+                min_value=vmin,
+                max_value=vmax,
+                default_value=vdef,
+                edge_enabled=edge_enabled,
+            )
+            is_array = False
+            size_expr = f"sizeof(char) * {array_len}" if not array_len.isdigit() else f"sizeof(char) * {count}"
+            vdef_str = "" if pd.isna(vdef) else str(vdef)
+            ram_ptr = var_name
+        else:
+            if any(pd.isna(value) for value in (vmin, vmax, vdef)):
+                continue
+            size_expr = f"sizeof({var_type}) * {array_len}" if is_array else f"sizeof({var_type})"
+            vdef_str = str(vdef).strip()
+            ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
+
         ram_decl = generate_static_definition(var_type, var_name, count, vdef_str)
-        ram_ptr = f"{var_name}" if is_array else f"&{var_name}"
 
         type_size = get_type_size(var_type)
         total_bytes = type_size * count
@@ -183,6 +209,54 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 def _validate_nvm_total_size(nvm_total_size: int) -> None:
     if nvm_total_size < 1 or nvm_total_size > 0xFFFF:
         raise ValueError("Config NVM_SIZE must be between 1 and 65535.")
+
+
+def _validate_string_entry(
+    *,
+    row_number: int,
+    var_name: str,
+    array_len: int,
+    min_value,
+    max_value,
+    default_value,
+    edge_enabled: bool,
+) -> None:
+    if array_len < 2:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"string ArrayLen must be at least 2, got {array_len}."
+        )
+    if (array_len % 2) != 0:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"string ArrayLen must be even, got {array_len}."
+        )
+    if edge_enabled:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: string EDGE must be FALSE."
+        )
+    if pd.isna(min_value) or str(min_value).strip() != "-":
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: string Min must be '-'."
+        )
+    if pd.isna(max_value) or str(max_value).strip() != "-":
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: string Max must be '-'."
+        )
+
+    default_text = "" if pd.isna(default_value) else str(default_value)
+    if len(default_text) > (array_len - 1):
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: string Default length "
+            f"must be {array_len - 1} bytes or less, got {len(default_text)}."
+        )
+    for ch in default_text:
+        code = ord(ch)
+        if code < 0x20 or code > 0x7E:
+            raise ValueError(
+                f"RegisterTable row {row_number} {var_name}: string Default "
+                "must contain ASCII printable characters only."
+            )
 
 
 def _read_config_int(config_df: pd.DataFrame, key_name: str) -> int:

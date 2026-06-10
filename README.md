@@ -285,7 +285,33 @@ void update_device_mode(uint16_t new_value)
 
 setter は min/max チェックを自動で行います。範囲外の値をセットしようとした場合は何も変更されません。値が現在値と異なる場合は RAM を更新し、`NVM_Offset` が有効なエントリでは `NVM_Request_Write_Bytes()` で NVM にも反映します。同じ値をセットした場合は成功扱いで戻りますが、RAM/NVM への書き込みは行いません。
 
-#### 4.6.3 下限値・上限値の取得
+#### 4.6.3 文字列レジスタのアクセス
+
+`Type` に `string` または `CHAR` を指定したレジスタでは、数値用の min/max 取得関数は生成されず、文字列専用のアクセサが生成されます。
+
+```c
+const char *name = get_device_name();
+
+char name_copy[16];
+if (get_device_name_copy(name_copy, sizeof(name_copy)) != 0)
+{
+    /* name_copy を使用 */
+}
+
+set_device_name("SENSOR-A");
+```
+
+生成される関数は次の 3 種類です。
+
+| 関数 | 用途 |
+|------|------|
+| `const char *get_<VarName>(void)` | 内部 RAM 上の NUL 終端文字列を直接参照する |
+| `int get_<VarName>_copy(char *dst, uint16_t dst_size)` | 呼び出し側のバッファへ文字列をコピーする |
+| `int set_<VarName>(const char *value)` | 文字列を検証して RAM に反映し、必要に応じて NVM に保存する |
+
+`set_<VarName>()` は ASCII printable 文字のみを許可します。`ArrayLen` は C の `char` バッファサイズなので、設定可能な文字数は最大 `ArrayLen - 1` 文字です。
+
+#### 4.6.4 下限値・上限値の取得
 
     uint16_t min_mode = get_device_mode_min();
     uint16_t max_mode = get_device_mode_max();
@@ -332,7 +358,7 @@ setter は min/max チェックを自動で行います。範囲外の値をセ�
 |------|------------|-------------------------------------------|
 | `Reg_Addr` | `1000` | Modbus アドレス(10進数) |
 | `VarName` | `device_mode` | レジスタの論理名（C 変数名にも使用） |
-| `Type` | `uint16_t` / `uint32_t` / `float` | 型（C コード生成に利用） |
+| `Type` | `uint16_t` / `uint32_t` / `float` / `string` / `CHAR` | 型（C コード生成に利用） |
 | `ArrayLen` | `1` / `NUM_DISCRETE_INPUTS` | 配列長。複数の場合は連続アドレスを自動展開 |
 | `Access` | `RW` / `RO` | Modbus 経由のアクセス権 |
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
@@ -342,6 +368,24 @@ setter は min/max チェックを自動で行います。範囲外の値をセ�
 | `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
 
 `NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
+
+##### 文字列レジスタ
+
+文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。C コード上は固定長の `char` 配列として生成され、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
+
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE |
+|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|
+| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `FALSE` |
+
+文字列レジスタには次の制約があります。
+
+- `ArrayLen` はバッファサイズ byte です。`ArrayLen=16` の場合、生成される RAM は `char device_name[16]` です。
+- `ArrayLen` は偶数のみ許可します。`15` のような奇数を指定するとエラーで生成を中止します。
+- 設定可能な文字数は最大 `ArrayLen - 1` 文字です。残りの領域は `0x00` で埋めます。
+- `Default` は ASCII printable 文字のみ指定できます。
+- `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
+- `EDGE` は `FALSE` のみ指定できます。文字列レジスタで `TRUE` を指定するとエラーになります。
+- Modbus Write で受信した文字列は、NUL 終端があり、NUL 以降がすべて `0x00` padding である場合だけ受け付けます。
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 
