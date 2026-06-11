@@ -8,7 +8,7 @@ from . import GeneratedFile
 
 
 def _collect_used_types(entries) -> Set[str]:
-    return {entry["var_type_str"] for entry in entries}
+    return {entry["var_type_str"] for entry in entries if entry["type"] != "REG_TYPE_RESERVED"}
 
 
 def _is_string_entry(entry) -> bool:
@@ -30,6 +30,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     ]
 
     for entry in entries:
+        if entry["type"] == "REG_TYPE_RESERVED":
+            continue
         base_name = entry["name"]
         if _is_string_entry(entry):
             access_lines.append(f"const char *get_{base_name}(void);")
@@ -162,6 +164,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     access_c_lines.append("/* Access function implementations */")
 
     for entry in entries:
+        if entry["type"] == "REG_TYPE_RESERVED":
+            continue
         name = entry["name"]
         if _is_string_entry(entry):
             idx_macro = f"MODBUS_IDX_{name}"

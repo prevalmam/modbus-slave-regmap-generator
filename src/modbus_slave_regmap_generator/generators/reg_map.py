@@ -41,7 +41,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             REG_TYPE_STRING,
             REG_TYPE_UINT16_ARRAY,
             REG_TYPE_UINT32_ARRAY,
-            REG_TYPE_FLOAT_ARRAY
+            REG_TYPE_FLOAT_ARRAY,
+            REG_TYPE_RESERVED
         }} reg_type_t;
 
         typedef enum {{
@@ -82,6 +83,9 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
     c_text = '#include "modbus_reg_map_slave.h"\n\n'
     for entry in entries:
+        if entry["type"] == "REG_TYPE_RESERVED":
+            continue
+
         c_text += f"{entry['ram_decl']}\n"
 
         if entry["type"] == "REG_TYPE_STRING":
@@ -110,11 +114,16 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += f"        {entry['modbus_addr']},\n"
         c_text += f"        {entry['nvm_offset']},\n"
         c_text += f"        {entry['size']},\n"
-        c_text += f"        default_{entry['name']},\n"
-        if entry["type"] == "REG_TYPE_STRING":
+        if entry["type"] == "REG_TYPE_RESERVED":
+            c_text += "        (const void *)0,\n"
+            c_text += "        (const void *)0,\n"
+            c_text += "        (const void *)0,\n"
+        elif entry["type"] == "REG_TYPE_STRING":
+            c_text += f"        default_{entry['name']},\n"
             c_text += "        (const void *)0,\n"
             c_text += "        (const void *)0,\n"
         else:
+            c_text += f"        default_{entry['name']},\n"
             c_text += f"        min_{entry['name']},\n"
             c_text += f"        max_{entry['name']},\n"
         c_text += f"        {entry['ram_ptr']},\n"

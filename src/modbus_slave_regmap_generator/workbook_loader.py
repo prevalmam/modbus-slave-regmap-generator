@@ -113,17 +113,66 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         if core_columns.isnull().all():
             continue
 
-        edge_flag = row.iloc[11] if len(row) > 11 else None
-        edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
-
-        reg_addr, var_name, var_type, array_len, access, vmin, vmax, vdef = core_columns
+        reg_addr, var_name, var_type_raw, array_len, access, vmin, vmax, vdef = core_columns
         nvm_offset_cell = row.iloc[10] if len(row) > 10 else None
-        if any(pd.isna(value) for value in (reg_addr, var_name, var_type, array_len, access)):
+
+        if any(pd.isna(value) for value in (reg_addr, var_name, var_type_raw, array_len)):
             continue
 
         var_name = str(var_name).strip()
-        var_type = normalize_type(str(var_type).strip())
+        var_type = normalize_type(str(var_type_raw).strip())
         array_len = str(array_len).strip()
+
+        # ── reserved エントリ ────────────────────────────────────────────
+        if var_type == "reserved":
+            edge_cell = row.iloc[11] if len(row) > 11 else None
+            _validate_reserved_columns(i + 1, var_name, access, vmin, vmax, vdef, nvm_offset_cell, edge_cell)
+
+            try:
+                num_regs = int(array_len)
+            except ValueError:
+                raise ValueError(
+                    f"RegisterTable row {i + 1} {var_name}: "
+                    f"reserved ArrayLen must be a positive integer, got '{array_len}'."
+                )
+            if num_regs < 1:
+                raise ValueError(
+                    f"RegisterTable row {i + 1} {var_name}: "
+                    f"reserved ArrayLen must be >= 1, got {num_regs}."
+                )
+
+            modbus_addr = _parse_reg_addr_cell(reg_addr, i + 1, var_name)
+            reg_addr_records.append(
+                {"row": i + 1, "name": var_name, "addr": modbus_addr, "num_regs": num_regs}
+            )
+            entries.append(
+                {
+                    "name": var_name,
+                    "modbus_addr": modbus_addr,
+                    "nvm_offset": "NVM_OFFSET_UNUSED",
+                    "size": f"{num_regs * 2}U",
+                    "default_value": "(const void *)0",
+                    "min_value": "(const void *)0",
+                    "max_value": "(const void *)0",
+                    "ram_ptr": "(void *)0",
+                    "ram_decl": None,
+                    "type": "REG_TYPE_RESERVED",
+                    "length": num_regs,
+                    "access": "ACCESS_READ",
+                    "busy_reject_flags": {key: "0U" for key in br_cols},
+                    "var_type_str": "reserved",
+                    "edge": False,
+                }
+            )
+            continue
+        # ────────────────────────────────────────────────────────────────
+
+        edge_flag = row.iloc[11] if len(row) > 11 else None
+        edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
+
+        if any(pd.isna(value) for value in (access,)):
+            continue
+
         access = str(access).strip()
         string_type = is_string_type(var_type)
 
@@ -213,6 +262,32 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         busy_reject_keys=list(br_cols.keys()),
         warnings=warnings,
     )
+
+
+def _validate_reserved_columns(
+    row_number: int,
+    var_name: str,
+    access,
+    vmin,
+    vmax,
+    vdef,
+    nvm_offset_cell,
+    edge_cell,
+) -> None:
+    for cell_val, col_name in [
+        (access, "Access"),
+        (vmin, "Min"),
+        (vmax, "Max"),
+        (vdef, "Default"),
+        (nvm_offset_cell, "NVM_Offset"),
+        (edge_cell, "EDGE"),
+    ]:
+        actual = "-" if pd.isna(cell_val) else str(cell_val).strip()
+        if actual != "-":
+            raise ValueError(
+                f"RegisterTable row {row_number} {var_name}: "
+                f"reserved {col_name} must be '-', got '{actual}'."
+            )
 
 
 def _parse_reg_addr_cell(value, row_number: int, var_name: str) -> int:

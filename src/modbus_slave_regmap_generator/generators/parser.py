@@ -122,7 +122,6 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     const reg_table_entry_t *entry;
     const reg_table_entry_t *matched[MAX_MATCHED_ENTRIES];
     uint16_t match_count = 0U;
-    int is_success = 0;
 
     end_addr = (uint16_t)(start_addr + num_regs);
     p = &tx_buf[0];
@@ -154,6 +153,25 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     }
 
     sort_entries_by_address(matched, match_count);
+
+    /* Verify full range coverage: no gaps allowed */
+    {
+        uint16_t expected = start_addr;
+        for (i = 0U; i < match_count; ++i)
+        {
+            uint16_t e_size = (uint16_t)(matched[i]->size / matched[i]->length);
+            uint16_t e_regs = (uint16_t)(((uint32_t)e_size * matched[i]->length) / 2U);
+            if (matched[i]->modbus_addr != expected)
+            {
+                return -1;
+            }
+            expected = (uint16_t)(matched[i]->modbus_addr + e_regs);
+        }
+        if (expected != end_addr)
+        {
+            return -1;
+        }
+    }
 
     for (i = 0U; i < match_count; ++i)
     {
@@ -209,6 +227,14 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
                 }
                 break;
 
+            case REG_TYPE_RESERVED:
+                for (j = 0U; j < entry->length; ++j)
+                {
+                    *p++ = 0x00U;
+                    *p++ = 0x00U;
+                }
+                break;
+
             default:
                 break;
         }
@@ -217,8 +243,7 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     (void)modbus_append_crc(tx_buf, (uint16_t)(p - tx_buf));
     ModbusPort_RequestSend(tx_buf, (uint16_t)((uint16_t)(p - tx_buf) + 2U));
 
-    is_success = 1;
-    return (is_success != 0) ? 0 : -1;
+    return 0;
 }
 
 void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)

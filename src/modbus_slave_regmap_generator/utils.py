@@ -7,6 +7,8 @@ def normalize_type(var_type: str) -> str:
     normalized = str(var_type).strip()
     if normalized.lower() in ("string", "char"):
         return "string"
+    if normalized.lower() == "reserved":
+        return "reserved"
     return normalized
 
 

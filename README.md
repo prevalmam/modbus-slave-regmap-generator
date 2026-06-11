@@ -358,7 +358,7 @@ set_device_name("SENSOR-A");
 |------|------------|-------------------------------------------|
 | `Reg_Addr` | `1000` | Modbus アドレス(10進数) |
 | `VarName` | `device_mode` | レジスタの論理名（C 変数名にも使用） |
-| `Type` | `uint16_t` / `uint32_t` / `float` / `string` / `CHAR` | 型（C コード生成に利用） |
+| `Type` | `uint16_t` / `uint32_t` / `float` / `string` / `CHAR` / `reserved` | 型（C コード生成に利用） |
 | `ArrayLen` | `1` / `NUM_DISCRETE_INPUTS` | 配列長。複数の場合は連続アドレスを自動展開 |
 | `Access` | `RW` / `RO` | Modbus 経由のアクセス権 |
 | `Min` | `0` | 許容最小値（境界チェックで使用） |
@@ -386,6 +386,36 @@ set_device_name("SENSOR-A");
 - `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
 - `EDGE` は `FALSE` のみ指定できます。文字列レジスタで `TRUE` を指定するとエラーになります。
 - Modbus Write で受信した文字列は、NUL 終端があり、NUL 以降がすべて `0x00` padding である場合だけ受け付けます。
+
+##### 予約レジスタ（reserved）
+
+連続するアドレスブロックを master が一括 Read する際、途中に何も割り当てていないアドレスが存在する場合は `Type` に `reserved` を指定します（大文字小文字は問いません）。
+
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE |
+|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|
+| `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `-` |
+
+- `ArrayLen` は **Modbus レジスタ数**（1 = 2 byte）で指定します。`2` であれば 1173〜1174 の 2 レジスタ分を予約します。
+- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` / `EDGE` はすべて `-` を指定してください。それ以外の値はエラーになります。
+- `VarName` は記述必須ですが、C 識別子の制約はありません（ドキュメント用途）。
+
+**生成物への影響**
+
+| 生成物 | 動作 |
+|--------|------|
+| RAM 変数 | 生成しない |
+| `default_` / `min_` / `max_` 定数 | 生成しない |
+| `get_` / `set_` アクセス関数 | 生成しない |
+| `g_reg_table_slave[]` エントリ | 生成する（`ram_ptr = NULL`、`REG_TYPE_RESERVED`） |
+| `MODBUS_IDX_` マクロ | 生成する（テーブルインデックスとの対応を維持するため） |
+
+**Read 時の挙動**
+
+| master の要求 | スレーブの応答 |
+|-------------|------|
+| reserved を含む範囲の一括 Read | reserved アドレス部分は `0x0000` で正常返答 |
+| reserved アドレス範囲に一致しない Read（例：2 レジスタ占有の reserved に対し 1 レジスタ単位で Read） | `ILLEGAL_DATA_ADDRESS` exception |
+| 登録されていないアドレスへの Read | `ILLEGAL_DATA_ADDRESS` exception |
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 

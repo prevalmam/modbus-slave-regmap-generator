@@ -23,6 +23,11 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         base_name = entry["name"]
         length = entry["length"]
 
+        if entry["type"] == "REG_TYPE_RESERVED":
+            idx_lines.append(f"#define MODBUS_IDX_{base_name}  ({idx})")
+            idx += 1
+            continue
+
         # Base index for g_reg_table_slave
         idx_lines.append(f"#define MODBUS_IDX_{base_name}  ({idx})")
 
