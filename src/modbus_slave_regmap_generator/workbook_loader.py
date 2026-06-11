@@ -102,6 +102,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
     entries: List[dict] = []
     nvm_ranges: List[dict] = []
+    reg_addr_records: List[dict] = []
     warnings: List[str] = []
 
     for i in range(header_row_index + 1, len(reg_table_df)):
@@ -134,6 +135,12 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             if array_len not in length_defs:
                 continue
             count = length_defs[array_len]
+
+        modbus_addr = _parse_reg_addr_cell(reg_addr, i + 1, var_name)
+        num_regs = (get_type_size(var_type) * count) // 2
+        reg_addr_records.append(
+            {"row": i + 1, "name": var_name, "addr": modbus_addr, "num_regs": num_regs}
+        )
 
         if string_type:
             _validate_string_entry(
@@ -179,7 +186,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         entries.append(
             {
                 "name": var_name,
-                "modbus_addr": int(reg_addr),
+                "modbus_addr": modbus_addr,
                 "nvm_offset": current_offset,
                 "size": size_expr,
                 "default_value": cast_struct_value(var_type, vdef, "default"),
@@ -196,6 +203,8 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             }
         )
 
+    _validate_reg_addr_list(reg_addr_records)
+
     return WorkbookData(
         entries=entries,
         length_defs=length_defs,
@@ -204,6 +213,74 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         busy_reject_keys=list(br_cols.keys()),
         warnings=warnings,
     )
+
+
+def _parse_reg_addr_cell(value, row_number: int, var_name: str) -> int:
+    if isinstance(value, bool):
+        _raise_invalid_reg_addr(value, row_number, var_name)
+
+    if isinstance(value, Integral):
+        addr = int(value)
+    elif isinstance(value, Real):
+        if not float(value).is_integer():
+            _raise_invalid_reg_addr(value, row_number, var_name)
+        addr = int(value)
+    else:
+        text = str(value).strip()
+        if re.fullmatch(r"[0-9]+", text):
+            addr = int(text)
+        else:
+            _raise_invalid_reg_addr(value, row_number, var_name)
+
+    if addr < 0 or addr > 0xFFFF:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"Reg_Addr must be 0-65535, got {addr}."
+        )
+    return addr
+
+
+def _raise_invalid_reg_addr(value, row_number: int, var_name: str) -> None:
+    raise ValueError(
+        f"RegisterTable row {row_number} {var_name}: "
+        f"Reg_Addr must be a non-negative integer, got '{value}'."
+    )
+
+
+def _validate_reg_addr_list(records: List[dict]) -> None:
+    for r in records:
+        end = r["addr"] + r["num_regs"]
+        if end > 0x10000:
+            raise ValueError(
+                f"RegisterTable row {r['row']} {r['name']}: "
+                f"Reg_Addr 0x{r['addr']:04X} with {r['num_regs']} register(s) "
+                f"ends at 0x{end - 1:04X}, exceeding the maximum Modbus address 0xFFFF."
+            )
+
+    sorted_recs = sorted(records, key=lambda r: r["addr"])
+    for i, a in enumerate(sorted_recs):
+        a_end = a["addr"] + a["num_regs"]
+        for b in sorted_recs[i + 1:]:
+            if b["addr"] >= a_end:
+                break
+            if b["addr"] == a["addr"]:
+                raise ValueError(
+                    f"RegisterTable row {b['row']} {b['name']}: "
+                    f"Reg_Addr 0x{b['addr']:04X} is already used by "
+                    f"row {a['row']} '{a['name']}'."
+                )
+            b_end = b["addr"] + b["num_regs"]
+            raise ValueError(
+                f"Register address overlap: "
+                f"row {a['row']} '{a['name']}' [0x{a['addr']:04X}-0x{a_end - 1:04X}] "
+                f"overlaps with row {b['row']} '{b['name']}' starting at 0x{b['addr']:04X}.\n"
+                f"  row {a['row']} '{a['name']}': "
+                f"Reg_Addr=0x{a['addr']:04X}, {a['num_regs']} register(s) "
+                f"[0x{a['addr']:04X}-0x{a_end - 1:04X}]\n"
+                f"  row {b['row']} '{b['name']}': "
+                f"Reg_Addr=0x{b['addr']:04X}, {b['num_regs']} register(s) "
+                f"[0x{b['addr']:04X}-0x{b_end - 1:04X}]"
+            )
 
 
 def _validate_nvm_total_size(nvm_total_size: int) -> None:
