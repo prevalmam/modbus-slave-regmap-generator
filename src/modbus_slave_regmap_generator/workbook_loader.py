@@ -33,7 +33,7 @@ class WorkbookData:
     length_defs: Dict[str, int]
     nvm_total_size: int
     modbus_slave_addr: int
-    busy_reject_keys: List[str]
+    group_validate_names: List[str]
     warnings: List[str]
 
 
@@ -59,7 +59,6 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             except ValueError:
                 continue
 
-    br_cols: Dict[str, int] = {}
     for i, row in reg_table_df.iterrows():
         if str(row[2]) == "Reg_Addr":
             header_row_index = i
@@ -75,6 +74,9 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 (9, "Default"),
                 (10, "NVM_Offset"),
                 (11, "EDGE"),
+                (12, "BUSY_REJECT"),
+                (13, "WRITE_CHECK"),
+                (14, "GROUP_VALIDATE"),
             ]
             for col_idx, expected in required_headers:
                 if col_idx >= len(header_row) or pd.isna(header_row.iloc[col_idx]):
@@ -88,14 +90,6 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                         f"expected '{expected}', got '{actual or '<empty>'}'"
                     )
 
-            for idx, col_name in enumerate(header_row):
-                if isinstance(col_name, str) and col_name.startswith("BR_"):
-                    key = col_name[3:]
-                    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-                        raise ValueError(
-                            f"Invalid BR_ column name: '{col_name}' is not a valid C identifier"
-                        )
-                    br_cols[key] = idx
             break
     else:
         raise ValueError("RegisterTable header row (Reg_Addr) not found")
@@ -103,6 +97,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
     entries: List[dict] = []
     nvm_ranges: List[dict] = []
     reg_addr_records: List[dict] = []
+    group_validate_names: List[str] = []
     warnings: List[str] = []
 
     for i in range(header_row_index + 1, len(reg_table_df)):
@@ -115,6 +110,10 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
         reg_addr, var_name, var_type_raw, array_len, access, vmin, vmax, vdef = core_columns
         nvm_offset_cell = row.iloc[10] if len(row) > 10 else None
+        edge_cell = row.iloc[11] if len(row) > 11 else None
+        busy_reject_cell = row.iloc[12] if len(row) > 12 else None
+        write_check_cell = row.iloc[13] if len(row) > 13 else None
+        group_validate_cell = row.iloc[14] if len(row) > 14 else None
 
         if any(pd.isna(value) for value in (reg_addr, var_name, var_type_raw, array_len)):
             continue
@@ -125,8 +124,29 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
         # ── reserved エントリ ────────────────────────────────────────────
         if var_type == "reserved":
-            edge_cell = row.iloc[11] if len(row) > 11 else None
-            _validate_reserved_columns(i + 1, var_name, access, vmin, vmax, vdef, nvm_offset_cell, edge_cell)
+            edge_enabled = _parse_bool_cell(edge_cell, "EDGE", i + 1)
+            busy_reject_enabled = _parse_bool_cell(
+                busy_reject_cell, "BUSY_REJECT", i + 1
+            )
+            write_check_enabled = _parse_bool_cell(
+                write_check_cell, "WRITE_CHECK", i + 1
+            )
+            group_validate = _parse_group_validate_cell(
+                group_validate_cell, i + 1, var_name
+            )
+            _validate_reserved_columns(
+                i + 1,
+                var_name,
+                access,
+                vmin,
+                vmax,
+                vdef,
+                nvm_offset_cell,
+                edge_enabled,
+                busy_reject_enabled,
+                write_check_enabled,
+                group_validate,
+            )
 
             try:
                 num_regs = int(array_len)
@@ -159,16 +179,27 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                     "type": "REG_TYPE_RESERVED",
                     "length": num_regs,
                     "access": "ACCESS_READ",
-                    "busy_reject_flags": {key: "0U" for key in br_cols},
                     "var_type_str": "reserved",
                     "edge": False,
+                    "is_array": False,
+                    "busy_reject": False,
+                    "write_check": False,
+                    "group_validate": None,
                 }
             )
             continue
         # ────────────────────────────────────────────────────────────────
 
-        edge_flag = row.iloc[11] if len(row) > 11 else None
-        edge_enabled = _parse_bool_cell(edge_flag, "EDGE", i + 1)
+        edge_enabled = _parse_bool_cell(edge_cell, "EDGE", i + 1)
+        busy_reject_enabled = _parse_bool_cell(
+            busy_reject_cell, "BUSY_REJECT", i + 1
+        )
+        write_check_enabled = _parse_bool_cell(
+            write_check_cell, "WRITE_CHECK", i + 1
+        )
+        group_validate = _parse_group_validate_cell(
+            group_validate_cell, i + 1, var_name
+        )
 
         if any(pd.isna(value) for value in (access,)):
             continue
@@ -176,14 +207,13 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         access = str(access).strip()
         string_type = is_string_type(var_type)
 
-        is_array = True
         try:
             count = int(array_len)
-            is_array = False
         except ValueError:
             if array_len not in length_defs:
                 continue
             count = length_defs[array_len]
+        is_array = count > 1
 
         modbus_addr = _parse_reg_addr_cell(reg_addr, i + 1, var_name)
         num_regs = (get_type_size(var_type) * count) // 2
@@ -227,10 +257,19 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             warnings=warnings,
         )
 
-        br_flags = {
-            key: "1U" if str(row[col_idx]).strip().upper() == "TRUE" else "0U"
-            for key, col_idx in br_cols.items()
-        }
+        access_mode = map_access(access)
+        if access_mode == "ACCESS_READ" and busy_reject_enabled:
+            raise ValueError(
+                f"RegisterTable row {i + 1} {var_name}: "
+                "BUSY_REJECT must be FALSE for a read-only register."
+            )
+        if access_mode == "ACCESS_READ" and write_check_enabled:
+            raise ValueError(
+                f"RegisterTable row {i + 1} {var_name}: "
+                "WRITE_CHECK must be FALSE for a read-only register."
+            )
+        if group_validate is not None and group_validate not in group_validate_names:
+            group_validate_names.append(group_validate)
 
         entries.append(
             {
@@ -245,10 +284,13 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 "ram_decl": ram_decl,
                 "type": map_type(var_type, is_array),
                 "length": count,
-                "access": map_access(access),
-                "busy_reject_flags": br_flags,
+                "access": access_mode,
                 "var_type_str": var_type,
                 "edge": edge_enabled,
+                "is_array": is_array,
+                "busy_reject": busy_reject_enabled,
+                "write_check": write_check_enabled,
+                "group_validate": group_validate,
             }
         )
 
@@ -259,7 +301,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         length_defs=length_defs,
         nvm_total_size=nvm_total_size,
         modbus_slave_addr=modbus_slave_addr,
-        busy_reject_keys=list(br_cols.keys()),
+        group_validate_names=group_validate_names,
         warnings=warnings,
     )
 
@@ -272,7 +314,10 @@ def _validate_reserved_columns(
     vmax,
     vdef,
     nvm_offset_cell,
-    edge_cell,
+    edge_enabled: bool,
+    busy_reject_enabled: bool,
+    write_check_enabled: bool,
+    group_validate,
 ) -> None:
     for cell_val, col_name in [
         (access, "Access"),
@@ -280,7 +325,6 @@ def _validate_reserved_columns(
         (vmax, "Max"),
         (vdef, "Default"),
         (nvm_offset_cell, "NVM_Offset"),
-        (edge_cell, "EDGE"),
     ]:
         actual = "-" if pd.isna(cell_val) else str(cell_val).strip()
         if actual != "-":
@@ -288,6 +332,25 @@ def _validate_reserved_columns(
                 f"RegisterTable row {row_number} {var_name}: "
                 f"reserved {col_name} must be '-', got '{actual}'."
             )
+    if edge_enabled:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: reserved EDGE must be FALSE."
+        )
+    if busy_reject_enabled:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            "reserved BUSY_REJECT must be FALSE."
+        )
+    if write_check_enabled:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            "reserved WRITE_CHECK must be FALSE."
+        )
+    if group_validate is not None:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            "reserved GROUP_VALIDATE must be '-'."
+        )
 
 
 def _parse_reg_addr_cell(value, row_number: int, var_name: str) -> int:
@@ -429,7 +492,10 @@ def _parse_bool_cell(value, column_name: str, row_number: int) -> bool:
             f"RegisterTable row {row_number}: {column_name} is empty. Set TRUE or FALSE."
         )
 
-    normalized = str(value).strip().upper()
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip()
     if normalized == "TRUE":
         return True
     if normalized == "FALSE":
@@ -438,6 +504,24 @@ def _parse_bool_cell(value, column_name: str, row_number: int) -> bool:
     raise ValueError(
         f"RegisterTable row {row_number}: {column_name} must be TRUE or FALSE, got '{value}'."
     )
+
+
+def _parse_group_validate_cell(value, row_number: int, var_name: str):
+    if pd.isna(value) or str(value).strip() == "":
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            "GROUP_VALIDATE is empty. Set '-' or a group name."
+        )
+
+    text = str(value).strip()
+    if text == "-":
+        return None
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text) is None:
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: "
+            f"GROUP_VALIDATE must be '-' or a valid C identifier, got '{value}'."
+        )
+    return text.lower()
 
 
 def _parse_nvm_offset_cell(

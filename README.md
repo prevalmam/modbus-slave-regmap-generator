@@ -366,16 +366,21 @@ set_device_name("SENSOR-A");
 | `Default` | `0` | 初期値 |
 | `NVM_Offset` | `-` / `0x0000` / `16` | `-` の場合は NVM に保存しない。数値の場合は NVM 領域先頭からのバイトオフセット |
 | `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
+| `BUSY_REJECT` | `TRUE`/`FALSE` | TRUE の場合、レジスタ単位のbusy状態によるModbus書込み拒否APIを生成する |
+| `WRITE_CHECK` | `TRUE`/`FALSE` | TRUE の場合、型付きユーザー書込み判定関数を呼び出す |
+| `GROUP_VALIDATE` | `-` / グループ名 | 同じグループ名のレジスタを仮更新後の値で検証する |
 
 `NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
+
+`EDGE`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。
 
 ##### 文字列レジスタ
 
 文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。C コード上は固定長の `char` 配列として生成され、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE |
-|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|
-| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `FALSE` |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
+| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `FALSE` | `FALSE` | `TRUE` | `DEVICE` |
 
 文字列レジスタには次の制約があります。
 
@@ -391,12 +396,12 @@ set_device_name("SENSOR-A");
 
 連続するアドレスブロックを master が一括 Read する際、途中に何も割り当てていないアドレスが存在する場合は `Type` に `reserved` を指定します（大文字小文字は問いません）。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE |
-|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|
-| `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `-` |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
+| `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `FALSE` | `FALSE` | `FALSE` | `-` |
 
 - `ArrayLen` は **Modbus レジスタ数**（1 = 2 byte）で指定します。`2` であれば 1173〜1174 の 2 レジスタ分を予約します。
-- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` / `EDGE` はすべて `-` を指定してください。それ以外の値はエラーになります。
+- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`EDGE` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
 - `VarName` は記述必須ですが、C 識別子の制約はありません（ドキュメント用途）。
 
 **生成物への影響**
@@ -441,24 +446,122 @@ set_device_name("SENSOR-A");
 
 ---
 
-### 5.2.生成されるファイル一覧
+### 5.2.書込みガード
+
+生成コードはModbus書込みを次の順序で処理します。
+
+1. 書込み範囲、アクセス権、レジスタ全体が含まれることを確認
+2. `BUSY_REJECT`を確認
+3. Min/Maxおよび文字列形式を確認
+4. `WRITE_CHECK`を呼び出す
+5. 仮更新後のpointer snapshotを作成
+6. 関係する`GROUP_VALIDATE`を呼び出す
+7. すべて成功した場合だけRAMへ反映し、必要なNVM書込みを要求
+
+配列、文字列、`uint32_t`、`float`を含め、Excelの1エントリの一部だけを書き込む要求は拒否します。複数レジスタ書込みで検証が失敗した場合、RAMとNVM書込み要求には一切反映しません。
+
+検証成功後はRAMを更新してから`NVM_Request_Write_Bytes()`を呼び出します。このNVM APIには戻り値がないため、NVMドライバ内部の失敗、キュー枯渇、書込み中の電源断まで含めた永続化のatomicityは保証しません。
+
+#### BUSY_REJECT
+
+`BUSY_REJECT=TRUE`のレジスタには次のAPIを生成します。
+
+```c
+MB_BOOL modbus_get_busy_reject_mode(void);
+void modbus_set_busy_reject_mode(MB_BOOL busy);
+```
+
+busy中のModbus書込みには`MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY`（`0x06`）を返します。busy状態は対象レジスタごとのbitで保持します。
+
+#### WRITE_CHECK
+
+`WRITE_CHECK=TRUE`のレジスタには型に応じたextern宣言を生成します。これらの関数はユーザープロジェクト側で実装してください。
+
+```c
+/* スカラー */
+modbus_write_result_t modbus_user_write_check_mode(
+    uint16_t current_value,
+    uint16_t new_value);
+
+/* 配列 */
+modbus_write_result_t modbus_user_write_check_table(
+    const uint16_t current_value[],
+    const uint16_t new_value[],
+    uint16_t count);
+
+/* 固定長文字列 */
+modbus_write_result_t modbus_user_write_check_name(
+    const char current_value[],
+    const char new_value[],
+    uint16_t size);
+```
+
+同値書込みの場合もWRITE_CHECKを呼び出します。`MODBUS_WRITE_OK`以外を返すと書込みを拒否し、その理由をModbus exceptionとして返します。
+
+#### GROUP_VALIDATEとpointer snapshot
+
+同じ`GROUP_VALIDATE`名を持つレジスタのいずれかが書込み範囲に含まれる場合、対応する関数を1回呼び出します。
+
+```c
+modbus_write_result_t modbus_user_group_validate_lower_upper(
+    const modbus_reg_snapshot_t *after)
+{
+    return (*after->lower <= *after->upper)
+        ? MODBUS_WRITE_OK
+        : MODBUS_WRITE_ILLEGAL_VALUE;
+}
+```
+
+`modbus_reg_snapshot_t`はGROUP_VALIDATEに参加する各レジスタへの型付きconst pointerを保持します。書込み対象はエンディアン変換済み・アラインメント済みの仮更新値、対象外は現在のRAM値を指します。配列と文字列も次のように直接参照できます。
+
+```c
+uint16_t first = after->table[0];
+char first_char = after->name[0];
+```
+
+snapshotとその各pointerはGROUP_VALIDATE callbackの実行中だけ有効です。callback終了後に保存または参照してはいけません。
+
+生成コードはC89互換のため、`bool`と`<stdbool.h>`を使用しません。
+
+```c
+typedef uint8_t MB_BOOL;
+typedef uint8_t modbus_write_result_t;
+
+#define MB_FALSE ((MB_BOOL)0U)
+#define MB_TRUE  ((MB_BOOL)1U)
+
+#define MODBUS_WRITE_OK              ((modbus_write_result_t)0x00U)
+#define MODBUS_WRITE_ILLEGAL_ADDRESS ((modbus_write_result_t)0x02U)
+#define MODBUS_WRITE_ILLEGAL_VALUE   ((modbus_write_result_t)0x03U)
+#define MODBUS_WRITE_DEVICE_FAILURE  ((modbus_write_result_t)0x04U)
+#define MODBUS_WRITE_DEVICE_BUSY     ((modbus_write_result_t)0x06U)
+```
+
+WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以外の値を返した場合は、生成parserが`MODBUS_WRITE_DEVICE_FAILURE`へ変換します。複数のcallbackが対象になる場合は、WRITE_CHECKをアドレス順、GROUP_VALIDATEをExcel上のグループ初出順に評価し、最初に返されたエラーを採用します。
+
+書込みscratchはModbus最大データ長と同じ252 byteを静的に確保します。受信処理とBUSY_REJECT setterは再入不可であり、main loopから直列に呼び出す前提です。
+
+---
+
+### 5.3.生成されるファイル一覧
 
 本ツール実行後、選択した Excel と同じフォルダに以下の C/C ヘッダファイル群が出力されます。
 
-#### 5.2.1.レジスタ定義・アクセサ
+#### 5.3.1.レジスタ定義・アクセサ
 | ファイル | 役割 |
 |---------|--------------------------------------------|
 | `modbus_reg_map_slave.c/h` | レジスタのメタ情報テーブル（型、アドレス、Min/Max/Default、RAM 参照など） |
 | `modbus_reg_idx_slave.h` | `MODBUS_IDX_***` マクロで各レジスタのインデックスを一元管理 |
 | `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
+| `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、pointer snapshot |
 
-#### 5.2.2.エッジ検出
+#### 5.3.2.エッジ検出
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
 | `modbus_reg_edge_slave.c/h` | `EDGE=TRUE` のレジスタに対する変化検出（rising / falling / toggled / changed）関数群 |
 
-#### 5.2.3.受信処理
+#### 5.3.3.受信処理
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|

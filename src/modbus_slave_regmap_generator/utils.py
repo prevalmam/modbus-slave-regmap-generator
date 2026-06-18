@@ -93,7 +93,7 @@ def map_type(var_type: str, is_array: bool) -> str:
 def map_access(access_str: str) -> str:
     """Normalize access string from Excel to enum constant."""
     s = str(access_str).strip().upper()
-    if s == "R":
+    if s in ("R", "RO"):
         return "ACCESS_READ"
     if s == "W":
         return "ACCESS_WRITE"

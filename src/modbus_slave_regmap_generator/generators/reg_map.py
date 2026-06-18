@@ -66,10 +66,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     """
     )
 
-    if workbook.busy_reject_keys:
-        for key in workbook.busy_reject_keys:
-            h_text += f"    uint8_t busy_reject_flag_{key};\n"
-
     h_text += textwrap.dedent(
         """\
         } reg_table_entry_t;
@@ -130,12 +126,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += f"        {entry['type']},\n"
         c_text += f"        {entry['length']},\n"
         c_text += f"        {entry['access']},\n"
-
-        br_keys = list(entry["busy_reject_flags"].keys())
-        for i, key in enumerate(br_keys):
-            val = entry["busy_reject_flags"][key]
-            comma = "," if i < len(br_keys) - 1 else ""
-            c_text += f"        {val}{comma}\n"
 
         c_text += "    },\n"
     c_text += "};\n\n"

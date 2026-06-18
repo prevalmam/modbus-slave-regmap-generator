@@ -9,7 +9,14 @@ if __package__ in {None, ""}:  # pragma: no cover - support direct execution / P
     sys.path.append(os.path.dirname(current_dir))
 
 from modbus_slave_regmap_generator.generators import GeneratedFile
-from modbus_slave_regmap_generator.generators import parser, reg_access, reg_edge, reg_idx, reg_map
+from modbus_slave_regmap_generator.generators import (
+    parser,
+    reg_access,
+    reg_edge,
+    reg_idx,
+    reg_map,
+    write_guard,
+)
 from modbus_slave_regmap_generator.workbook_loader import load_workbook_data
 from modbus_slave_regmap_generator.writer import write_generated_files
 
@@ -30,6 +37,7 @@ def main() -> None:
         generated_files.extend(reg_idx.generate(workbook))
         generated_files.extend(reg_access.generate(workbook))
         generated_files.extend(reg_edge.generate(workbook))
+        generated_files.extend(write_guard.generate(workbook))
         generated_files.extend(parser.generate(workbook))
 
         out_dir = os.path.dirname(file_path)

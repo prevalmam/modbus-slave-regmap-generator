@@ -40,4 +40,4 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     idx_lines.append("")
     idx_lines.append("#endif")
 
-    return [GeneratedFile("modbus_reg_idx_slave.h", "\n".join(idx_lines))]
+    return [GeneratedFile("modbus_reg_idx_slave.h", "\n".join(idx_lines) + "\n")]

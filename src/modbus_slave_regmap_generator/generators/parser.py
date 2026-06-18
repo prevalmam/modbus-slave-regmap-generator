@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
+from ..utils import get_base_type
 from ..workbook_loader import WorkbookData
 from . import GeneratedFile
 
@@ -18,7 +19,7 @@ MODBUS_PARSER_HEADER = """\
 
 #include <stdint.h>
 
-#define MODBUS_EXC_SLAVE_DEVICE_BUSY  0x06U
+#define MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY  (0x06U)
 
 extern void NVM_Request_Write_Bytes(uint16_t offset,
                                     const uint8_t *data,
@@ -35,6 +36,8 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
 MODBUS_PARSER_SOURCE = """\
 #include "modbus_parser.h"
 #include "modbus_reg_map_slave.h"
+#include "modbus_reg_idx_slave.h"
+#include "modbus_reg_write_guard_slave.h"
 #include <string.h>
 
 /* Function Codes */
@@ -306,7 +309,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
             		}
             		else
             		{
-            			modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_VALUE);
+                        modbus_send_exception_response(slave_addr, function, (uint8_t)status);
             		}
             	}
                 else
@@ -333,7 +336,11 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                     start_addr = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | (uint16_t)rx_buf[3]);
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
 
-                    if (len >= (MODBUS_WRITE_MULTI_HEADER_LENGTH + (uint16_t)(2U * num_regs) + 2U))
+                    if ((num_regs > 0U) &&
+                        (num_regs <= (MODBUS_MAX_DATA_LENGTH / MODBUS_REG_SIZE_BYTES)) &&
+                        (rx_buf[6] == (uint8_t)(num_regs * MODBUS_REG_SIZE_BYTES)) &&
+                        (len >= (uint16_t)(MODBUS_WRITE_MULTI_HEADER_LENGTH +
+                                          (num_regs * MODBUS_REG_SIZE_BYTES) + 2U)))
                     {
                     	data = &rx_buf[7];
 
@@ -344,7 +351,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                     	}
                     	else
                     	{
-                    		modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_VALUE);
+                            modbus_send_exception_response(slave_addr, function, (uint8_t)status);
                     	}
                     }
                     else
@@ -894,9 +901,475 @@ uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
 """
 
 
-def generate(_: WorkbookData) -> List[GeneratedFile]:
-    """Return static modbus parser files so they are part of the generated artifacts."""
+def _build_write_check_cases(workbook: WorkbookData) -> List[str]:
+    lines: List[str] = []
+    for entry in workbook.entries:
+        if not entry["write_check"]:
+            continue
+        name = entry["name"]
+        base_type = get_base_type(entry["type"])
+        lines.append(f"        case MODBUS_IDX_{name}:")
+        if entry["type"] == "REG_TYPE_STRING":
+            lines.extend(
+                [
+                    f"            return modbus_user_write_check_{name}(",
+                    "                (const char *)entry->ram_ptr,",
+                    "                (const char *)after_value,",
+                    "                entry->size);",
+                ]
+            )
+        elif entry["is_array"]:
+            lines.extend(
+                [
+                    f"            return modbus_user_write_check_{name}(",
+                    f"                (const {base_type} *)entry->ram_ptr,",
+                    f"                (const {base_type} *)after_value,",
+                    "                entry->length);",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"            return modbus_user_write_check_{name}(",
+                    f"                *((const {base_type} *)entry->ram_ptr),",
+                    f"                *((const {base_type} *)after_value));",
+                ]
+            )
+    return lines
+
+
+def _build_atomic_write_source(workbook: WorkbookData) -> str:
+    snapshot_entries = [
+        entry
+        for entry in workbook.entries
+        if entry["type"] != "REG_TYPE_RESERVED" and entry["group_validate"] is not None
+    ]
+
+    lines = [
+        "typedef union",
+        "{",
+        "    uint8_t bytes[MODBUS_MAX_DATA_LENGTH];",
+        "    uint32_t align_uint32;",
+        "    float align_float;",
+        "} modbus_write_scratch_t;",
+        "",
+        "static modbus_write_scratch_t s_write_scratch;",
+        "",
+        "static const reg_table_entry_t *find_entry_at_address(",
+        "    uint16_t address, uint16_t *table_index)",
+        "{",
+        "    uint16_t i;",
+        "",
+        "    for (i = 0U; i < g_reg_table_slave_size; ++i)",
+        "    {",
+        "        if (g_reg_table_slave[i].modbus_addr == address)",
+        "        {",
+        "            *table_index = i;",
+        "            return &g_reg_table_slave[i];",
+        "        }",
+        "    }",
+        "    return (const reg_table_entry_t *)0;",
+        "}",
+        "",
+        "static uint16_t entry_register_count(const reg_table_entry_t *entry)",
+        "{",
+        "    return (uint16_t)(entry->size / MODBUS_REG_SIZE_BYTES);",
+        "}",
+        "",
+        "static void scratch_reset(uint16_t *front, uint16_t *back)",
+        "{",
+        "    *front = 0U;",
+        "    *back = MODBUS_MAX_DATA_LENGTH;",
+        "}",
+        "",
+        "static void *scratch_allocate(const reg_table_entry_t *entry,",
+        "                              uint16_t *front, uint16_t *back)",
+        "{",
+        "    uint16_t new_back;",
+        "    void *result;",
+        "",
+        "    if ((entry->type == REG_TYPE_UINT32) ||",
+        "        (entry->type == REG_TYPE_UINT32_ARRAY) ||",
+        "        (entry->type == REG_TYPE_FLOAT) ||",
+        "        (entry->type == REG_TYPE_FLOAT_ARRAY))",
+        "    {",
+        "        if (entry->size > *back)",
+        "        {",
+        "            return (void *)0;",
+        "        }",
+        "        new_back = (uint16_t)(*back - entry->size);",
+        "        if (new_back < *front)",
+        "        {",
+        "            return (void *)0;",
+        "        }",
+        "        *back = new_back;",
+        "        result = &s_write_scratch.bytes[new_back];",
+        "    }",
+        "    else",
+        "    {",
+        "        if ((uint16_t)(*back - *front) < entry->size)",
+        "        {",
+        "            return (void *)0;",
+        "        }",
+        "        result = &s_write_scratch.bytes[*front];",
+        "        *front = (uint16_t)(*front + entry->size);",
+        "    }",
+        "    return result;",
+        "}",
+        "",
+        "static int decode_entry_after_value(const reg_table_entry_t *entry,",
+        "                                    const uint8_t *data,",
+        "                                    void *after_value)",
+        "{",
+        "    uint16_t i;",
+        "    uint16_t value16;",
+        "    uint32_t value32;",
+        "    uint16_t *dst16;",
+        "    uint32_t *dst32;",
+        "    float *dst_float;",
+        "    const uint16_t *min16;",
+        "    const uint16_t *max16;",
+        "    const uint32_t *min32;",
+        "    const uint32_t *max32;",
+        "    const float *min_float;",
+        "    const float *max_float;",
+        "    union { uint32_t u32; float f; } conv;",
+        "    uint8_t ch;",
+        "    int found_nul;",
+        "",
+        "    switch (entry->type)",
+        "    {",
+        "        case REG_TYPE_UINT16:",
+        "        case REG_TYPE_UINT16_ARRAY:",
+        "            dst16 = (uint16_t *)after_value;",
+        "            min16 = (const uint16_t *)entry->min_value;",
+        "            max16 = (const uint16_t *)entry->max_value;",
+        "            for (i = 0U; i < entry->length; ++i)",
+        "            {",
+        "                value16 = (uint16_t)(((uint16_t)data[i * 2U] << 8U) |",
+        "                                     (uint16_t)data[i * 2U + 1U]);",
+        "                if ((value16 < min16[i]) || (value16 > max16[i]))",
+        "                {",
+        "                    return -1;",
+        "                }",
+        "                dst16[i] = value16;",
+        "            }",
+        "            return 0;",
+        "",
+        "        case REG_TYPE_UINT32:",
+        "        case REG_TYPE_UINT32_ARRAY:",
+        "            dst32 = (uint32_t *)after_value;",
+        "            min32 = (const uint32_t *)entry->min_value;",
+        "            max32 = (const uint32_t *)entry->max_value;",
+        "            for (i = 0U; i < entry->length; ++i)",
+        "            {",
+        "                value32 = ((uint32_t)data[i * 4U] << 24U) |",
+        "                          ((uint32_t)data[i * 4U + 1U] << 16U) |",
+        "                          ((uint32_t)data[i * 4U + 2U] << 8U) |",
+        "                          (uint32_t)data[i * 4U + 3U];",
+        "                if ((value32 < min32[i]) || (value32 > max32[i]))",
+        "                {",
+        "                    return -1;",
+        "                }",
+        "                dst32[i] = value32;",
+        "            }",
+        "            return 0;",
+        "",
+        "        case REG_TYPE_FLOAT:",
+        "        case REG_TYPE_FLOAT_ARRAY:",
+        "            dst_float = (float *)after_value;",
+        "            min_float = (const float *)entry->min_value;",
+        "            max_float = (const float *)entry->max_value;",
+        "            for (i = 0U; i < entry->length; ++i)",
+        "            {",
+        "                conv.u32 = ((uint32_t)data[i * 4U] << 24U) |",
+        "                           ((uint32_t)data[i * 4U + 1U] << 16U) |",
+        "                           ((uint32_t)data[i * 4U + 2U] << 8U) |",
+        "                           (uint32_t)data[i * 4U + 3U];",
+        "                if ((conv.f < min_float[i]) || (conv.f > max_float[i]))",
+        "                {",
+        "                    return -1;",
+        "                }",
+        "                dst_float[i] = conv.f;",
+        "            }",
+        "            return 0;",
+        "",
+        "        case REG_TYPE_STRING:",
+        "            found_nul = 0;",
+        "            for (i = 0U; i < entry->size; ++i)",
+        "            {",
+        "                ch = data[i];",
+        "                ((uint8_t *)after_value)[i] = ch;",
+        "                if (found_nul != 0)",
+        "                {",
+        "                    if (ch != 0U) { return -1; }",
+        "                }",
+        "                else if (ch == 0U)",
+        "                {",
+        "                    found_nul = 1;",
+        "                }",
+        "                else if ((ch < 0x20U) || (ch > 0x7EU))",
+        "                {",
+        "                    return -1;",
+        "                }",
+        "                else",
+        "                {",
+        "                    /* ASCII printable character. */",
+        "                }",
+        "            }",
+        "            return (found_nul != 0) ? 0 : -1;",
+        "",
+        "        default:",
+        "            return -1;",
+        "    }",
+        "}",
+        "",
+            "static modbus_write_result_t normalize_user_write_result(",
+            "    modbus_write_result_t result)",
+            "{",
+            "    switch (result)",
+            "    {",
+            "        case MODBUS_WRITE_OK:",
+            "        case MODBUS_WRITE_ILLEGAL_ADDRESS:",
+            "        case MODBUS_WRITE_ILLEGAL_VALUE:",
+            "        case MODBUS_WRITE_DEVICE_FAILURE:",
+            "        case MODBUS_WRITE_DEVICE_BUSY:",
+            "            return result;",
+            "        default:",
+            "            return MODBUS_WRITE_DEVICE_FAILURE;",
+            "    }",
+            "}",
+            "",
+            "static modbus_write_result_t run_user_write_check(",
+            "    uint16_t table_index,",
+            "    const reg_table_entry_t *entry,",
+            "    const void *after_value)",
+        "{",
+        "    switch (table_index)",
+        "    {",
+    ]
+    lines.extend(_build_write_check_cases(workbook))
+    lines.extend(
+        [
+            "        default:",
+            "            return MODBUS_WRITE_OK;",
+            "    }",
+            "}",
+            "",
+            "static void snapshot_initialize(modbus_reg_snapshot_t *snapshot)",
+            "{",
+        ]
+    )
+    if snapshot_entries:
+        for entry in snapshot_entries:
+            base_type = get_base_type(entry["type"])
+            lines.append(
+                f"    snapshot->{entry['name']} = (const {base_type} *)"
+                f"g_reg_table_slave[MODBUS_IDX_{entry['name']}].ram_ptr;"
+            )
+    else:
+        lines.append("    snapshot->unused = (const uint8_t *)0;")
+    lines.extend(
+        [
+            "}",
+            "",
+            "static void snapshot_set_after_pointer(modbus_reg_snapshot_t *snapshot,",
+            "                                       uint16_t table_index,",
+            "                                       const void *after_value)",
+            "{",
+            "    switch (table_index)",
+            "    {",
+        ]
+    )
+    for entry in snapshot_entries:
+        base_type = get_base_type(entry["type"])
+        lines.extend(
+            [
+                f"        case MODBUS_IDX_{entry['name']}:",
+                f"            snapshot->{entry['name']} = (const {base_type} *)after_value;",
+                "            break;",
+            ]
+        )
+    lines.extend(
+        [
+            "        default:",
+            "            break;",
+            "    }",
+            "}",
+            "",
+            "static int handle_modbus_multi_write(uint16_t start_addr,",
+            "                                     uint16_t num_regs,",
+            "                                     const uint8_t *data)",
+            "{",
+            "    uint32_t end_addr32;",
+            "    uint16_t end_addr;",
+            "    uint16_t expected;",
+            "    uint16_t table_index;",
+            "    uint16_t entry_regs;",
+            "    uint16_t front;",
+            "    uint16_t back;",
+            "    const uint8_t *entry_data;",
+            "    const reg_table_entry_t *entry;",
+            "    void *after_value;",
+            "    modbus_reg_snapshot_t snapshot;",
+            "    modbus_write_result_t user_result;",
+        ]
+    )
+    for group_name in workbook.group_validate_names:
+        lines.append(f"    MB_BOOL group_{group_name}_affected = MB_FALSE;")
+    lines.extend(
+        [
+            "",
+            "    if ((data == (const uint8_t *)0) || (num_regs == 0U) ||",
+            "        (num_regs > (MODBUS_MAX_DATA_LENGTH / MODBUS_REG_SIZE_BYTES)))",
+            "    {",
+            "        return MODBUS_EXC_ILLEGAL_DATA_VALUE;",
+            "    }",
+            "    end_addr32 = (uint32_t)start_addr + (uint32_t)num_regs;",
+            "    if (end_addr32 > 0x10000UL)",
+            "    {",
+            "        return MODBUS_EXC_ILLEGAL_DATA_ADDRESS;",
+            "    }",
+            "    end_addr = (uint16_t)end_addr32;",
+            "",
+            "    expected = start_addr;",
+            "    while (expected != end_addr)",
+            "    {",
+            "        entry = find_entry_at_address(expected, &table_index);",
+            "        if ((entry == (const reg_table_entry_t *)0) ||",
+            "            (entry->type == REG_TYPE_RESERVED) ||",
+            "            (entry->access == ACCESS_READ))",
+            "        {",
+            "            return MODBUS_EXC_ILLEGAL_DATA_ADDRESS;",
+            "        }",
+            "        entry_regs = entry_register_count(entry);",
+            "        if ((entry_regs == 0U) ||",
+            "            ((uint32_t)expected + entry_regs > end_addr32))",
+            "        {",
+            "            return MODBUS_EXC_ILLEGAL_DATA_ADDRESS;",
+            "        }",
+            "        if (modbus_write_guard_entry_is_busy(table_index) != MB_FALSE)",
+            "        {",
+            "            return MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY;",
+            "        }",
+            "        expected = (uint16_t)(expected + entry_regs);",
+            "    }",
+            "",
+            "    snapshot_initialize(&snapshot);",
+            "    scratch_reset(&front, &back);",
+            "    expected = start_addr;",
+            "    while (expected != end_addr)",
+            "    {",
+            "        entry = find_entry_at_address(expected, &table_index);",
+            "        after_value = scratch_allocate(entry, &front, &back);",
+            "        if (after_value == (void *)0)",
+            "        {",
+            "            return MODBUS_EXC_SLAVE_DEVICE_FAILURE;",
+            "        }",
+            "        entry_data = &data[(uint16_t)(expected - start_addr) * 2U];",
+            "        if (decode_entry_after_value(entry, entry_data, after_value) != 0)",
+            "        {",
+            "            return MODBUS_EXC_ILLEGAL_DATA_VALUE;",
+            "        }",
+            "        user_result = normalize_user_write_result(",
+            "            run_user_write_check(table_index, entry, after_value));",
+            "        if (user_result != MODBUS_WRITE_OK)",
+            "        {",
+            "            return (int)user_result;",
+            "        }",
+            "        snapshot_set_after_pointer(&snapshot, table_index, after_value);",
+        ]
+    )
+    for group_name in workbook.group_validate_names:
+        group_entries = [
+            entry
+            for entry in snapshot_entries
+            if entry["group_validate"] == group_name
+        ]
+        if group_entries:
+            condition = " || ".join(
+                f"table_index == MODBUS_IDX_{entry['name']}"
+                for entry in group_entries
+            )
+            lines.extend(
+                [
+                    f"        if ({condition})",
+                    "        {",
+                    f"            group_{group_name}_affected = MB_TRUE;",
+                    "        }",
+                ]
+            )
+    lines.extend(
+        [
+            "        expected = (uint16_t)(expected + entry_register_count(entry));",
+            "    }",
+            "",
+        ]
+    )
+    for group_name in workbook.group_validate_names:
+        lines.extend(
+            [
+                f"    if (group_{group_name}_affected != MB_FALSE)",
+                "    {",
+                "        user_result = normalize_user_write_result(",
+                f"            modbus_user_group_validate_{group_name}(&snapshot));",
+                "        if (user_result != MODBUS_WRITE_OK)",
+                "        {",
+                "            return (int)user_result;",
+                "        }",
+                "    }",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "    scratch_reset(&front, &back);",
+            "    expected = start_addr;",
+            "    while (expected != end_addr)",
+            "    {",
+            "        entry = find_entry_at_address(expected, &table_index);",
+            "        after_value = scratch_allocate(entry, &front, &back);",
+            "        if (memcmp(entry->ram_ptr, after_value, entry->size) != 0)",
+            "        {",
+            "            (void)memcpy(entry->ram_ptr, after_value, entry->size);",
+            "            if (entry->nvm_offset != NVM_OFFSET_UNUSED)",
+            "            {",
+            "                NVM_Request_Write_Bytes(entry->nvm_offset,",
+            "                                        (const uint8_t *)entry->ram_ptr,",
+            "                                        entry->size);",
+            "            }",
+            "        }",
+            "        expected = (uint16_t)(expected + entry_register_count(entry));",
+            "    }",
+            "    return 0;",
+            "}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def generate(workbook: WorkbookData) -> List[GeneratedFile]:
+    """Return generated Modbus parser files."""
+    source = MODBUS_PARSER_SOURCE
+    for declaration in [
+        "static int handle_write_uint16_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);\n",
+        "static int handle_write_uint32_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);\n",
+        "static int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);\n",
+        "static int handle_write_string_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len);\n",
+    ]:
+        source = source.replace(declaration, "")
+
+    start_marker = (
+        "int handle_modbus_multi_write(uint16_t start_addr, uint16_t num_regs, "
+        "const uint8_t *data)\n{"
+    )
+    end_marker = "void modbus_send_write_multi_ack"
+    start = source.index(start_marker)
+    end = source.index(end_marker, start)
+    source = source[:start] + _build_atomic_write_source(workbook) + source[end:]
+
     return [
         GeneratedFile("modbus_parser.h", MODBUS_PARSER_HEADER),
-        GeneratedFile("modbus_parser.c", MODBUS_PARSER_SOURCE),
+        GeneratedFile("modbus_parser.c", source),
     ]
