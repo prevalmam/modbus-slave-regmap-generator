@@ -15,3 +15,11 @@ def write_generated_files(out_dir: str, files: Iterable[GeneratedFile]) -> None:
         full_path = os.path.join(out_dir, gen_file.filename)
         with open(full_path, "w", encoding="utf-8") as handle:
             handle.write(gen_file.content)
+
+
+def remove_obsolete_generated_files(out_dir: str, filenames: Iterable[str]) -> None:
+    """Remove explicitly named generated files retired by the current schema."""
+    for filename in filenames:
+        full_path = os.path.join(out_dir, filename)
+        if os.path.isfile(full_path):
+            os.remove(full_path)

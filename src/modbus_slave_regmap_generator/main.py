@@ -12,13 +12,16 @@ from modbus_slave_regmap_generator.generators import GeneratedFile
 from modbus_slave_regmap_generator.generators import (
     parser,
     reg_access,
-    reg_edge,
     reg_idx,
     reg_map,
+    write_event,
     write_guard,
 )
 from modbus_slave_regmap_generator.workbook_loader import load_workbook_data
-from modbus_slave_regmap_generator.writer import write_generated_files
+from modbus_slave_regmap_generator.writer import (
+    remove_obsolete_generated_files,
+    write_generated_files,
+)
 
 
 def main() -> None:
@@ -36,11 +39,15 @@ def main() -> None:
         generated_files.extend(reg_map.generate(workbook))
         generated_files.extend(reg_idx.generate(workbook))
         generated_files.extend(reg_access.generate(workbook))
-        generated_files.extend(reg_edge.generate(workbook))
+        generated_files.extend(write_event.generate(workbook))
         generated_files.extend(write_guard.generate(workbook))
         generated_files.extend(parser.generate(workbook))
 
         out_dir = os.path.dirname(file_path)
+        remove_obsolete_generated_files(
+            out_dir,
+            ("modbus_reg_edge_slave.c", "modbus_reg_edge_slave.h"),
+        )
         write_generated_files(out_dir, generated_files)
     except ValueError as exc:
         messagebox.showerror("modbus-slave-regmap-generator", str(exc))

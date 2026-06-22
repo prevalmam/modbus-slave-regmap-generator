@@ -37,6 +37,7 @@ MODBUS_PARSER_SOURCE = """\
 #include "modbus_parser.h"
 #include "modbus_reg_map_slave.h"
 #include "modbus_reg_idx_slave.h"
+#include "modbus_reg_write_event_slave.h"
 #include "modbus_reg_write_guard_slave.h"
 #include <string.h>
 
@@ -1339,6 +1340,7 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
             "                                        entry->size);",
             "            }",
             "        }",
+            "        modbus_reg_write_event_mark(table_index);",
             "        expected = (uint16_t)(expected + entry_register_count(entry));",
             "    }",
             "    return 0;",

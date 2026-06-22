@@ -188,9 +188,9 @@ void NVM_Request_Write_Bytes(uint16_t offset,
 
 ### 4.3 初期化
 
-起動時に行うべき初期処理は次の 2 ステップに集約されます。
+起動時に行うべき初期処理は、RAM の実値を初期化することです。
 
-1. **RAM の実値を `g_reg_table_slave` 経由でセットする** — NVM/別ストレージからの復元あるいはデフォルト値の適用を、生成済み getter/setter ではなく `g_reg_table_slave` の `ram_ptr` と `size` を使って一括処理するのが最も手軽でミスがありません。永続領域のデータがない場合は、`default_value` をコピーするだけで RAM が仕様書どおりに初期化されます。
+**RAM の実値を `g_reg_table_slave` 経由でセットする** — NVM/別ストレージからの復元あるいはデフォルト値の適用を、生成済み getter/setter ではなく `g_reg_table_slave` の `ram_ptr` と `size` を使って一括処理するのが最も手軽でミスがありません。永続領域のデータがない場合は、`default_value` をコピーするだけで RAM が仕様書どおりに初期化されます。
 
     ```c
     static void load_reg_defaults(void)
@@ -209,17 +209,7 @@ void NVM_Request_Write_Bytes(uint16_t offset,
     }
     ```
 
-2. **`modbus_reg_edge_init()` でエッジ検出のプリロードを行う** — 上記の RAM セット後にこの関数を 1 回呼ぶと、RegisterTable で `EDGE` 列を `TRUE` にしたエッジ検出器が「現在値＝前回値」で同期され、初回ポーリング時の誤検知を防げます。以降は周期タスクや受信ハンドラから各 `detect_*` 関数をそのまま利用できます。
-
-```c
-void app_init(void)
-{
-    load_reg_defaults();          /* RAM に初期値を展開 */
-    modbus_reg_edge_init();       /* エッジ検出の前回値をプリロード */
-}
-```
-
-その他の生成ファイル（reg_map/access/sender/reply_handler 等）は静的データや純粋関数のみで構成されているため、追加の初期化は不要です。
+write通知を含むその他の生成ファイルは静的領域がゼロ初期化されるため、追加の初期化は不要です。
 
 ### 4.4 送信処理（Request の送信）
 
@@ -317,48 +307,82 @@ set_device_name("SENSOR-A");
     uint16_t max_mode = get_device_mode_max();
 ---
 
-### 4.7 エッジ検出（値変化の検知）
+### 4.7 Master write 通知
 
-エッジ検出は、Modbus Master が Write Single（0x06）または Write Multiple
-（0x10）で要求した値の変化をアプリ側へ通知する用途を想定しています。
-生成された `set_<VarName>()` で内部から値を設定した場合、その変数に属する
-エッジ検出器だけが新しい値へ同期されるため、次回の `detect_*` 呼び出しでは
-内部設定を変化として検出しません。ほかの変数に残っている未処理のエッジは
-維持されます。
-
-`set_<VarName>()` に現在値と同じ値を渡した場合も、その変数のエッジ検出器は
-現在値へ同期されます。内部設定後に必要な副作用がある場合は、エッジ検出を
-経由させず、setter の呼び出し元から明示的に実行してください。
-
-起動時の `modbus_reg_edge_init()` は全エッジ検出器を初期値へ同期するための
-関数です。通常運転中の内部設定では `set_<VarName>()` が対象変数だけを同期
-するため、setter の後に `modbus_reg_edge_init()` を呼ぶ必要はありません。
-
-#### 4.7.1 立ち上がり検出の例（単体値）
+RegisterTable の `WRITE_NOTIFY` を `TRUE` にすると、Modbus Masterから正常に
+受理したwrite要求をアプリ側で取得する関数が生成されます。
 
 ```c
-    if (detect_device_mode_rising(0xffff)) {
-        // 0 → 1 に変化したときだけ実行
-    }
+if (consume_device_mode_written() != 0)
+{
+    uint16_t value = get_device_mode();
+    app_apply_device_mode(value);
+}
 ```
 
-特定のビットマスクを指定することも可能：
+`consume_<VarName>_written()`はラッチされた通知を返してクリアします。一度
+writeを受理すると、別の変数へのwriteが発生しても、対象のconsume関数が
+呼ばれるまで通知は保持されます。
 
-#### 4.7.2 立ち下がり検出の例（単体値）
+通常は、アプリ側にwrite通知をまとめて処理する関数を用意します。
 
 ```c
-    if (detect_device_mode_falling(0xffff)) {
-        // 1 → 0 に変化したときだけ実行
+static void app_dispatch_modbus_writes(void)
+{
+    if (consume_device_mode_written() != 0)
+    {
+        uint16_t value = get_device_mode();
+        app_apply_device_mode(value);
     }
+
+    if (consume_start_command_written() != 0)
+    {
+        uint16_t command = get_start_command();
+        app_handle_start_command(command);
+    }
+}
 ```
 
-#### 4.7.3 トグル検出の例（配列値）
+呼び出し順序や実行タイミングはアプリ側で決定します。一般的には受信処理後に
+呼び出せます。
 
 ```c
-    if (detect_discrete_inputs_toggled(0x0003)) {
-        // ビット 0 またはビット 1 が変化したときだけ実行
-    }
+modbus_parse_and_reply(frame, len);
+app_dispatch_modbus_writes();
 ```
+
+baudrate、parity、UART再初期化、再起動など、write応答の送信完了前に実行
+すると通信へ影響する処理は、UARTのTX完了後など安全なタイミングでconsume
+してください。通知はconsumeされるまで保持されるため、受信直後に処理する
+必要はありません。
+
+```c
+void app_on_modbus_tx_complete(void)
+{
+    if (consume_modbus_baudrate_written() != 0)
+    {
+        app_request_modbus_config_update(get_modbus_baudrate());
+    }
+}
+```
+
+- Write Single（0x06）とWrite Multiple（0x10）の両方を通知します。
+- 現在値と同じ値がwriteされた場合も通知します。
+- BUSY_REJECT、WRITE_CHECK、GROUP_VALIDATEなどで拒否したwriteは通知しません。
+- Write Multipleでは、要求に含まれる各変数を個別に通知します。
+- consume前に同じ変数へ複数回writeされた場合、通知は1件に集約されます。
+  `get_<VarName>()`では最後に受理された値を取得できます。
+- 内部処理からの`set_<VarName>()`は通知しません。内部設定後の副作用は
+  setterの呼び出し元から明示的に実行してください。
+- 配列は要素単位ではなく変数単位で通知します。
+- write通知に初期化関数は不要です。
+- parserとconsume関数はmain loopなど同じ実行コンテキストから直列に
+  呼び出してください。ISRや別タスクから同時に操作する場合は、呼び出し側で
+  排他制御が必要です。
+
+`consume_<VarName>_written()`は呼び出した時点で通知をクリアします。同じ
+変数の通知を複数箇所でconsumeすると、最初に呼び出した箇所だけが`1`を
+取得します。各変数のconsume担当箇所は1か所に決めてください。
 
 
 ## 5.詳細仕様
@@ -380,22 +404,22 @@ set_device_name("SENSOR-A");
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
 | `NVM_Offset` | `-` / `0x0000` / `16` | `-` の場合は NVM に保存しない。数値の場合は NVM 領域先頭からのバイトオフセット |
-| `EDGE` | `TRUE`/`FALSE` | TRUE の場合、該当レジスタのエッジ検出関数を生成する |
+| `WRITE_NOTIFY` | `TRUE`/`FALSE` | TRUE の場合、正常に受理したMaster writeのconsume関数を生成する |
 | `BUSY_REJECT` | `TRUE`/`FALSE` | TRUE の場合、レジスタ単位のbusy状態によるModbus書込み拒否APIを生成する |
 | `WRITE_CHECK` | `TRUE`/`FALSE` | TRUE の場合、型付きユーザー書込み判定関数を呼び出す |
 | `GROUP_VALIDATE` | `-` / グループ名 | 同じグループ名のレジスタを仮更新後の値で検証する |
 
 `NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
 
-`EDGE`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。
+`WRITE_NOTIFY`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。`WRITE_NOTIFY=TRUE`はModbus経由で書込み可能なレジスタだけに指定できます。
 
 ##### 文字列レジスタ
 
 文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。C コード上は固定長の `char` 配列として生成され、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | WRITE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
 |---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
-| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `FALSE` | `FALSE` | `TRUE` | `DEVICE` |
+| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `TRUE` | `FALSE` | `TRUE` | `DEVICE` |
 
 文字列レジスタには次の制約があります。
 
@@ -404,19 +428,19 @@ set_device_name("SENSOR-A");
 - 設定可能な文字数は最大 `ArrayLen - 1` 文字です。残りの領域は `0x00` で埋めます。
 - `Default` は ASCII printable 文字のみ指定できます。
 - `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
-- `EDGE` は `FALSE` のみ指定できます。文字列レジスタで `TRUE` を指定するとエラーになります。
+- `WRITE_NOTIFY`を`TRUE`にすると、文字列レジスタへの正常なMaster writeも通知できます。
 - Modbus Write で受信した文字列は、NUL 終端があり、NUL 以降がすべて `0x00` padding である場合だけ受け付けます。
 
 ##### 予約レジスタ（reserved）
 
 連続するアドレスブロックを master が一括 Read する際、途中に何も割り当てていないアドレスが存在する場合は `Type` に `reserved` を指定します（大文字小文字は問いません）。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | EDGE | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | WRITE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
 |---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
 | `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `FALSE` | `FALSE` | `FALSE` | `-` |
 
 - `ArrayLen` は **Modbus レジスタ数**（1 = 2 byte）で指定します。`2` であれば 1173〜1174 の 2 レジスタ分を予約します。
-- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`EDGE` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
+- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`WRITE_NOTIFY` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
 - `VarName` は記述必須ですが、C 識別子の制約はありません（ドキュメント用途）。
 
 **生成物への影響**
@@ -570,11 +594,13 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 | `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
 | `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、pointer snapshot |
 
-#### 5.3.2.エッジ検出
+#### 5.3.2.Master write通知
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
-| `modbus_reg_edge_slave.c/h` | `EDGE=TRUE` のレジスタに対する変化検出（rising / falling / toggled / changed）関数群 |
+| `modbus_reg_write_event_slave.c/h` | `WRITE_NOTIFY=TRUE`のレジスタに対するラッチ型write通知とconsume関数 |
+
+旧schemaの`modbus_reg_edge_slave.c/h`が出力先に存在する場合は、再生成時に削除されます。
 
 #### 5.3.3.受信処理
 

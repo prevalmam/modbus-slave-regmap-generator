@@ -20,7 +20,7 @@ HEADERS = [
     "Max",
     "Default",
     "NVM_Offset",
-    "EDGE",
+    "WRITE_NOTIFY",
     "BUSY_REJECT",
     "WRITE_CHECK",
     "GROUP_VALIDATE",
@@ -124,7 +124,7 @@ class WriteGuardGenerationTests(unittest.TestCase):
         )
 
         entry = workbook.entries[0]
-        self.assertFalse(entry["edge"])
+        self.assertFalse(entry["write_notify"])
         self.assertTrue(entry["busy_reject"])
         self.assertFalse(entry["write_check"])
 
