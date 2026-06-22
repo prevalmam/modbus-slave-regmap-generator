@@ -19,6 +19,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     entries = workbook.entries
     used_types = _collect_used_types(entries)
     has_string = any(_is_string_entry(entry) for entry in entries)
+    has_edge = any(entry["edge"] for entry in entries)
 
     access_lines = [
         "#ifndef MODBUS_REG_ACCESS_SLAVE_H",
@@ -68,6 +69,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         '#include "modbus_reg_map_slave.h"',
         '#include "modbus_reg_idx_slave.h"',
     ]
+    if has_edge:
+        access_c_lines.append('#include "modbus_reg_edge_slave.h"')
     if has_string:
         access_c_lines.append("#include <string.h>")
     access_c_lines.extend(
@@ -275,11 +278,22 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
         access_c_lines.append("    if (value == current)")
         access_c_lines.append("    {")
+        if entry["edge"]:
+            if is_array:
+                access_c_lines.append(
+                    f"        modbus_reg_edge_sync_{name}(index, value);"
+                )
+            else:
+                access_c_lines.append(f"        modbus_reg_edge_sync_{name}(value);")
         access_c_lines.append("        return 1;")
         access_c_lines.append("    }")
 
         if is_array:
             access_c_lines.append("    ram[index] = value;")
+            if entry["edge"]:
+                access_c_lines.append(
+                    f"    modbus_reg_edge_sync_{name}(index, value);"
+                )
             access_c_lines.append(f"    if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
             access_c_lines.append("    {")
             access_c_lines.append(
@@ -293,6 +307,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("    }")
         else:
             access_c_lines.append(f"    {write_func}({entry_ref}.ram_ptr, value);")
+            if entry["edge"]:
+                access_c_lines.append(f"    modbus_reg_edge_sync_{name}(value);")
             access_c_lines.append(
                 f"    write_nvm_if_used({entry_ref}.nvm_offset, {entry_ref}.ram_ptr, "
                 "(uint16_t)sizeof(value));"

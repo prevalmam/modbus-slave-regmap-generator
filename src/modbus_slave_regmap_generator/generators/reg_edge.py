@@ -49,143 +49,218 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         entry_type = entry["type"]
 
         if entry_type == "REG_TYPE_FLOAT" and not is_array:
+            prev_name = f"s_prev_{name}_changed"
             func = f"detect_{name}_changed"
+            sync_func = f"modbus_reg_edge_sync_{name}"
+            edge_c_lines.append(f"static float {prev_name};")
             edge_h_lines.append(f"int {func}(void);")
+            edge_h_lines.append(f"void {sync_func}(float value);")
             edge_c_lines.extend(
                 [
                     f"int {func}(void)",
                     "{",
-                    "    static float prev;",
                     f"    float curr = get_{name}();",
-                    "    if (!is_float_equal(prev, curr))",
+                    f"    if (!is_float_equal({prev_name}, curr))",
                     "    {",
-                    "        prev = curr;",
+                    f"        {prev_name} = curr;",
                     "        return 1;",
                     "    }",
-                    "    prev = curr;",
+                    f"    {prev_name} = curr;",
                     "    return 0;",
+                    "}",
+                    "",
+                    f"void {sync_func}(float value)",
+                    "{",
+                    f"    {prev_name} = value;",
                     "}",
                 ]
             )
 
         if entry_type in ("REG_TYPE_UINT16", "REG_TYPE_UINT32") and not is_array:
+            prev_names = {}
             for kind, condition in [
-                ("rising", "((prev & bit_mask) == 0U) && ((curr & bit_mask) != 0U)"),
-                ("falling", "((prev & bit_mask) != 0U) && ((curr & bit_mask) == 0U)"),
-                ("toggled", "((prev ^ curr) & bit_mask) != 0U"),
+                (
+                    "rising",
+                    "(({prev} & bit_mask) == 0U) && ((curr & bit_mask) != 0U)",
+                ),
+                (
+                    "falling",
+                    "(({prev} & bit_mask) != 0U) && ((curr & bit_mask) == 0U)",
+                ),
+                ("toggled", "(({prev} ^ curr) & bit_mask) != 0U"),
             ]:
+                prev_name = f"s_prev_{name}_{kind}"
+                prev_names[kind] = prev_name
                 func = f"detect_{name}_{kind}"
+                edge_c_lines.append(f"static {base_type} {prev_name};")
                 edge_h_lines.append(f"int {func}(uint16_t bit_mask);")
                 edge_c_lines.extend(
                     [
                         f"int {func}(uint16_t bit_mask)",
                         "{",
-                        f"    static {base_type} prev;",
                         f"    {base_type} curr = get_{name}();",
-                        f"    if ({condition})",
+                        f"    if ({condition.format(prev=prev_name)})",
                         "    {",
-                        "        prev = curr;",
+                        f"        {prev_name} = curr;",
                         "        return 1;",
                         "    }",
-                        "    prev = curr;",
+                        f"    {prev_name} = curr;",
                         "    return 0;",
                         "}",
                     ]
                 )
+            sync_func = f"modbus_reg_edge_sync_{name}"
+            edge_h_lines.append(f"void {sync_func}({base_type} value);")
+            edge_c_lines.extend(
+                [
+                    f"void {sync_func}({base_type} value)",
+                    "{",
+                    f"    {prev_names['rising']} = value;",
+                    f"    {prev_names['falling']} = value;",
+                    f"    {prev_names['toggled']} = value;",
+                    "}",
+                ]
+            )
 
         elif entry_type == "REG_TYPE_FLOAT_ARRAY":
+            changed_prev_name = f"s_prev_{name}_changed"
+            any_prev_name = f"s_prev_{name}_any_changed"
             func = f"detect_{name}_changed"
+            edge_c_lines.append(
+                f"static float {changed_prev_name}[{entry['length']}];"
+            )
             edge_h_lines.append(f"int {func}(uint16_t index);")
             edge_c_lines.extend(
                 [
                     f"int {func}(uint16_t index)",
                     "{",
-                    f"    static float prev[{entry['length']}];",
                     "    float curr;",
                     f"    if (index >= {entry['length']}U) return 0;",
                     f"    curr = get_{name}(index);",
-                    "    if (!is_float_equal(prev[index], curr))",
+                    f"    if (!is_float_equal({changed_prev_name}[index], curr))",
                     "    {",
-                    "        prev[index] = curr;",
+                    f"        {changed_prev_name}[index] = curr;",
                     "        return 1;",
                     "    }",
-                    "    prev[index] = curr;",
+                    f"    {changed_prev_name}[index] = curr;",
                     "    return 0;",
                     "}",
                 ]
             )
 
             func = f"detect_{name}_any_changed"
+            edge_c_lines.append(f"static float {any_prev_name}[{entry['length']}];")
             edge_h_lines.append(f"int {func}(void);")
             edge_c_lines.extend(
                 [
                     f"int {func}(void)",
                     "{",
-                    f"    static float prev[{entry['length']}];",
                     "    float curr;",
                     "    uint16_t i;",
                     f"    for (i = 0; i < {entry['length']}; ++i)",
                     "    {",
                     f"        curr = get_{name}(i);",
-                    "        if (!is_float_equal(prev[i], curr))",
+                    f"        if (!is_float_equal({any_prev_name}[i], curr))",
                     "        {",
-                    "            prev[i] = curr;",
+                    f"            {any_prev_name}[i] = curr;",
                     "            return 1;",
                     "        }",
-                    "        prev[i] = curr;",
+                    f"        {any_prev_name}[i] = curr;",
                     "    }",
                     "    return 0;",
                     "}",
                 ]
             )
+            sync_func = f"modbus_reg_edge_sync_{name}"
+            edge_h_lines.append(f"void {sync_func}(uint16_t index, float value);")
+            edge_c_lines.extend(
+                [
+                    f"void {sync_func}(uint16_t index, float value)",
+                    "{",
+                    f"    if (index >= {entry['length']}U) return;",
+                    f"    {changed_prev_name}[index] = value;",
+                    f"    {any_prev_name}[index] = value;",
+                    "}",
+                ]
+            )
 
         elif entry_type in ("REG_TYPE_UINT16_ARRAY", "REG_TYPE_UINT32_ARRAY"):
+            prev_names = {}
             for kind, condition in [
-                ("rising", "((prev[index] & bit_mask) == 0U) && ((curr & bit_mask) != 0U)"),
-                ("falling", "((prev[index] & bit_mask) != 0U) && ((curr & bit_mask) == 0U)"),
-                ("toggled", "((prev[index] ^ curr) & bit_mask) != 0U"),
+                (
+                    "rising",
+                    "(({prev}[index] & bit_mask) == 0U) && ((curr & bit_mask) != 0U)",
+                ),
+                (
+                    "falling",
+                    "(({prev}[index] & bit_mask) != 0U) && ((curr & bit_mask) == 0U)",
+                ),
+                ("toggled", "(({prev}[index] ^ curr) & bit_mask) != 0U"),
             ]:
+                prev_name = f"s_prev_{name}_{kind}"
+                prev_names[kind] = prev_name
                 func = f"detect_{name}_{kind}_edge"
+                edge_c_lines.append(
+                    f"static {base_type} {prev_name}[{entry['length']}];"
+                )
                 edge_h_lines.append(f"int {func}(uint16_t index, uint16_t bit_mask);")
                 edge_c_lines.extend(
                     [
                         f"int {func}(uint16_t index, uint16_t bit_mask)",
                         "{",
-                        f"    static {base_type} prev[{entry['length']}];",
                         f"    {base_type} curr;",
                         f"    if (index >= {entry['length']}U) return 0;",
                         f"    curr = get_{name}(index);",
-                        f"    if ({condition})",
+                        f"    if ({condition.format(prev=prev_name)})",
                         "    {",
-                        "        prev[index] = curr;",
+                        f"        {prev_name}[index] = curr;",
                         "        return 1;",
                         "    }",
-                        "    prev[index] = curr;",
+                        f"    {prev_name}[index] = curr;",
                         "    return 0;",
                         "}",
                     ]
                 )
 
             func = f"detect_{name}_any_changed"
+            any_prev_name = f"s_prev_{name}_any_changed"
+            edge_c_lines.append(
+                f"static {base_type} {any_prev_name}[{entry['length']}];"
+            )
             edge_h_lines.append(f"int {func}(void);")
             edge_c_lines.extend(
                 [
                     f"int {func}(void)",
                     "{",
-                    f"    static {base_type} prev[{entry['length']}];",
                     f"    {base_type} curr;",
                     "    uint16_t i;",
                     f"    for (i = 0; i < {entry['length']}; ++i)",
                     "    {",
                     f"        curr = get_{name}(i);",
-                    "        if (curr != prev[i])",
+                    f"        if (curr != {any_prev_name}[i])",
                     "        {",
-                    "            prev[i] = curr;",
+                    f"            {any_prev_name}[i] = curr;",
                     "            return 1;",
                     "        }",
-                    "        prev[i] = curr;",
+                    f"        {any_prev_name}[i] = curr;",
                     "    }",
                     "    return 0;",
+                    "}",
+                ]
+            )
+            sync_func = f"modbus_reg_edge_sync_{name}"
+            edge_h_lines.append(
+                f"void {sync_func}(uint16_t index, {base_type} value);"
+            )
+            edge_c_lines.extend(
+                [
+                    f"void {sync_func}(uint16_t index, {base_type} value)",
+                    "{",
+                    f"    if (index >= {entry['length']}U) return;",
+                    f"    {prev_names['rising']}[index] = value;",
+                    f"    {prev_names['falling']}[index] = value;",
+                    f"    {prev_names['toggled']}[index] = value;",
+                    f"    {any_prev_name}[index] = value;",
                     "}",
                 ]
             )
