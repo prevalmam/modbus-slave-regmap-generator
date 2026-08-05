@@ -226,7 +226,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         )
 
         if string_type:
-            _validate_string_entry(
+            vdef = _validate_string_entry(
                 row_number=i + 1,
                 var_name=var_name,
                 array_len=count,
@@ -236,7 +236,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             )
             is_array = False
             size_expr = f"sizeof(char) * {array_len}" if not array_len.isdigit() else f"sizeof(char) * {count}"
-            vdef_str = "" if pd.isna(vdef) else str(vdef)
+            vdef_str = vdef
             ram_ptr = var_name
         else:
             if any(pd.isna(value) for value in (vmin, vmax, vdef)):
@@ -285,7 +285,11 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 "modbus_addr": modbus_addr,
                 "nvm_offset": current_offset,
                 "size": size_expr,
-                "default_value": cast_struct_value(var_type, vdef, "default"),
+                "default_value": (
+                    vdef_str
+                    if string_type
+                    else cast_struct_value(var_type, vdef, "default")
+                ),
                 "min_value": cast_struct_value(var_type, vmin, "min"),
                 "max_value": cast_struct_value(var_type, vmax, "max"),
                 "ram_ptr": ram_ptr,
@@ -435,6 +439,19 @@ def _validate_nvm_total_size(nvm_total_size: int) -> None:
         raise ValueError("Config NVM_SIZE must be between 1 and 65535.")
 
 
+def _resolve_string_default(raw_value: str) -> str:
+    """Resolve the authored Default cell into the literal string content.
+
+    Bare '-' means "empty string". A dash wrapped in double quotes (e.g. '"-"')
+    escapes that marker so a literal '-' can still be used as content.
+    """
+    if raw_value == "-":
+        return ""
+    if len(raw_value) >= 2 and raw_value.startswith('"') and raw_value.endswith('"'):
+        return raw_value[1:-1]
+    return raw_value
+
+
 def _validate_string_entry(
     *,
     row_number: int,
@@ -443,7 +460,7 @@ def _validate_string_entry(
     min_value,
     max_value,
     default_value,
-) -> None:
+) -> str:
     if array_len < 2:
         raise ValueError(
             f"RegisterTable row {row_number} {var_name}: "
@@ -463,11 +480,17 @@ def _validate_string_entry(
             f"RegisterTable row {row_number} {var_name}: string Max must be '-'."
         )
 
-    default_text = "" if pd.isna(default_value) else str(default_value)
-    if len(default_text) > (array_len - 1):
+    if pd.isna(default_value) or str(default_value).strip() == "":
+        raise ValueError(
+            f"RegisterTable row {row_number} {var_name}: string Default must not "
+            "be blank. Use '-' for an empty string."
+        )
+
+    default_text = _resolve_string_default(str(default_value))
+    if len(default_text) > array_len:
         raise ValueError(
             f"RegisterTable row {row_number} {var_name}: string Default length "
-            f"must be {array_len - 1} bytes or less, got {len(default_text)}."
+            f"must be {array_len} bytes or less, got {len(default_text)}."
         )
     for ch in default_text:
         code = ord(ch)
@@ -476,6 +499,7 @@ def _validate_string_entry(
                 f"RegisterTable row {row_number} {var_name}: string Default "
                 "must contain ASCII printable characters only."
             )
+    return default_text
 
 
 def _read_config_int(config_df: pd.DataFrame, key_name: str) -> int:

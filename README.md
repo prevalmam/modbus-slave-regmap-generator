@@ -280,26 +280,30 @@ setter は min/max チェックを自動で行います。範囲外の値をセ�
 `Type` に `string` または `CHAR` を指定したレジスタでは、数値用の min/max 取得関数は生成されず、文字列専用のアクセサが生成されます。
 
 ```c
-const char *name = get_device_name();
-
-char name_copy[16];
+char name_copy[MODBUS_device_name_BUFFER_SIZE];
 if (get_device_name_copy(name_copy, sizeof(name_copy)) != 0)
 {
-    /* name_copy を使用 */
+    /* name_copy は NUL 終端されているため、C の文字列関数へ渡せる。 */
 }
 
 set_device_name("SENSOR-A");
 ```
 
-生成される関数は次の 3 種類です。
+生成される定数と関数は次のとおりです。定数名の `<VarName>` 部分は、RegisterTable に記述した大文字・小文字をそのまま保持します。
+
+| 定数 | 用途 |
+|------|------|
+| `MODBUS_<VarName>_MAX_LENGTH` | 設定可能な最大文字数。ASCII printable 文字列では `ArrayLen` と同じ値になる |
+| `MODBUS_<VarName>_BUFFER_SIZE` | 最大長の文字列と終端 NUL を格納できるバッファサイズ。`MAX_LENGTH + 1U` として生成される |
 
 | 関数 | 用途 |
 |------|------|
-| `const char *get_<VarName>(void)` | 内部 RAM 上の NUL 終端文字列を直接参照する |
-| `int get_<VarName>_copy(char *dst, uint16_t dst_size)` | 呼び出し側のバッファへ文字列をコピーする |
-| `int set_<VarName>(const char *value)` | 文字列を検証して RAM に反映し、必要に応じて NVM に保存する |
+| `int get_<VarName>_copy(char *dst, uint16_t dst_size)` | 固定長フィールドを呼び出し側へコピーし、末尾に NUL を追加する |
+| `int set_<VarName>(const char *value)` | NUL 終端された C 文字列を検証して固定長フィールドへ反映し、必要に応じて NVM に保存する |
 
-`set_<VarName>()` は ASCII printable 文字のみを許可します。`ArrayLen` は C の `char` バッファサイズなので、設定可能な文字数は最大 `ArrayLen - 1` 文字です。
+`set_<VarName>()` は ASCII printable 文字のみを許可し、最大 `MODBUS_<VarName>_MAX_LENGTH` 文字まで設定できます。`get_<VarName>_copy()` のコピー先には `MODBUS_<VarName>_BUFFER_SIZE` byte 以上を確保してください。
+
+内部 RAM は `ArrayLen` byte の固定長フィールドであり、最大長まで文字が格納されている場合はフィールド内に NUL がありません。そのため、内部 RAM や Modbus から読み出した固定長データを `strlen()`、`strcmp()`、`printf("%s", ...)` などの C 標準文字列関数へ直接渡してはいけません。標準文字列関数を使用する場合は、必ず `get_<VarName>_copy()` で `ArrayLen + 1` byte 以上のバッファへコピーし、NUL 終端された C 文字列に変換してから渡してください。
 
 #### 4.6.4 下限値・上限値の取得
 
@@ -415,7 +419,7 @@ void app_on_modbus_tx_complete(void)
 
 ##### 文字列レジスタ
 
-文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。C コード上は固定長の `char` 配列として生成され、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
+文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。RAM、NVM、Modbus 上では `ArrayLen` byte の固定長フィールドとして扱い、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
 
 | Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | WRITE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
 |---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
@@ -423,13 +427,19 @@ void app_on_modbus_tx_complete(void)
 
 文字列レジスタには次の制約があります。
 
-- `ArrayLen` はバッファサイズ byte です。`ArrayLen=16` の場合、生成される RAM は `char device_name[16]` です。
+- `ArrayLen` は固定長フィールドのサイズであると同時に、設定可能な最大文字数です。`ArrayLen=16` の場合、RAM、NVM、Modbus の占有サイズは 16 byte で、最大16文字まで設定できます。
+- stringごとに`MODBUS_<VarName>_MAX_LENGTH`と`MODBUS_<VarName>_BUFFER_SIZE`が`modbus_reg_access_slave.h`へ生成されます。アプリ側の最大文字数やC文字列バッファサイズには、この定数を使用してください。
 - `ArrayLen` は偶数のみ許可します。`15` のような奇数を指定するとエラーで生成を中止します。
-- 設定可能な文字数は最大 `ArrayLen - 1` 文字です。残りの領域は `0x00` で埋めます。
-- `Default` は ASCII printable 文字のみ指定できます。
+- 文字数が `ArrayLen` 未満の場合は、文字列の後ろを `0x00` で埋めます。文字数がちょうど `ArrayLen` の場合は、フィールド内の全 byte を文字として使用し、フィールド内に終端 NUL は格納しません。
+- `Default` は ASCII printable 文字のみ指定できます。空欄は許可しません（入力漏れと区別するため）。
+- `Default` を空文字列にしたい場合は `-` を指定してください。リテラルの `-` という文字列をDefaultにしたい場合は `"-"` のようにダブルクォートで囲みます。
 - `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
 - `WRITE_NOTIFY`を`TRUE`にすると、文字列レジスタへの正常なMaster writeも通知できます。
-- Modbus Write で受信した文字列は、NUL 終端があり、NUL 以降がすべて `0x00` padding である場合だけ受け付けます。
+- Modbus Write では、途中に NUL がある場合はNUL以降がすべて `0x00` paddingであるデータを受け付けます。NULがない場合は、全 `ArrayLen` byteがASCII printable文字であれば最大長の文字列として受け付けます。
+
+固定長フィールドは、最大長まで文字が格納されている場合にNUL終端されません。内部RAMやModbusデータをC文字列として直接扱わず、`strlen()`、`strcmp()`、`printf("%s", ...)`などへ渡す前に、`ArrayLen + 1` byte以上のバッファへコピーして末尾にNULを追加してください。生成される`get_<VarName>_copy()`はこの変換を行います。
+
+生成される`modbus_string_field_is_valid()`は、固定長フィールドが「ASCII printable文字＋`0x00` padding」または「全byteがASCII printable文字」のどちらかであることを検証します。`modbus_string_field_length()`は先頭のNUL位置、NULがなければフィールドサイズを論理文字数として返します。ユーザープロジェクト側でNVMから復元する場合も、この検証関数を使用して`ArrayLen` byteだけをRAMへコピーしてください。NVM上に終端用の追加byteは保存しません。
 
 ##### 予約レジスタ（reserved）
 
@@ -530,10 +540,11 @@ modbus_write_result_t modbus_user_write_check_table(
 
 /* 固定長文字列 */
 modbus_write_result_t modbus_user_write_check_name(
-    const char current_value[],
-    const char new_value[],
-    uint16_t size);
+    const modbus_string_view_t *current_value,
+    const modbus_string_view_t *new_value);
 ```
+
+`modbus_string_view_t`はNUL終端を前提としない固定長文字列への参照と論理文字数を保持します。文字列用WRITE_CHECKでは`data[0]`から`data[length - 1]`までを検証し、`data`をC標準文字列関数へ直接渡さないでください。
 
 同値書込みの場合もWRITE_CHECKを呼び出します。`MODBUS_WRITE_OK`以外を返すと書込みを拒否し、その理由をModbus exceptionとして返します。
 
@@ -551,14 +562,15 @@ modbus_write_result_t modbus_user_group_validate_lower_upper(
 }
 ```
 
-`modbus_reg_snapshot_t`はGROUP_VALIDATEに参加する各レジスタへの型付きconst pointerを保持します。書込み対象はエンディアン変換済み・アラインメント済みの仮更新値、対象外は現在のRAM値を指します。配列と文字列も次のように直接参照できます。
+`modbus_reg_snapshot_t`はGROUP_VALIDATEに参加する各レジスタへの型付きconst pointerまたは文字列viewを保持します。書込み対象はエンディアン変換済み・アラインメント済みの仮更新値、対象外は現在のRAM値を指します。配列と文字列は次のように参照できます。
 
 ```c
 uint16_t first = after->table[0];
-char first_char = after->name[0];
+char first_char = after->name.data[0];
+uint16_t name_length = after->name.length;
 ```
 
-snapshotとその各pointerはGROUP_VALIDATE callbackの実行中だけ有効です。callback終了後に保存または参照してはいけません。
+snapshotとその各pointer/viewはGROUP_VALIDATE callbackの実行中だけ有効です。callback終了後に保存または参照してはいけません。
 
 生成コードはC89互換のため、`bool`と`<stdbool.h>`を使用しません。
 
@@ -592,7 +604,7 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 | `modbus_reg_map_slave.c/h` | レジスタのメタ情報テーブル（型、アドレス、Min/Max/Default、RAM 参照など） |
 | `modbus_reg_idx_slave.h` | `MODBUS_IDX_***` マクロで各レジスタのインデックスを一元管理 |
 | `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
-| `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、pointer snapshot |
+| `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、typed snapshot |
 
 #### 5.3.2.Master write通知
 

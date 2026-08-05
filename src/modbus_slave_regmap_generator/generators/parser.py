@@ -701,14 +701,11 @@ int handle_write_float_entry(const reg_table_entry_t *entry, const uint8_t *data
 
 int handle_write_string_entry(const reg_table_entry_t *entry, const uint8_t *data, uint16_t len)
 {
-    uint16_t i;
     int is_valid_ptr = 1;
     int is_valid_len = 1;
     int is_valid_buf = 1;
     int is_valid_data = 1;
-    int found_nul = 0;
     int need_write = 0;
-    uint8_t ch;
     uint8_t temp_buf[256];
 
     int is_all_valid = 0;
@@ -728,36 +725,11 @@ int handle_write_string_entry(const reg_table_entry_t *entry, const uint8_t *dat
 
     if ((is_valid_ptr != 0) && (is_valid_len != 0) && (is_valid_buf != 0))
     {
-        for (i = 0U; i < len; ++i)
+        if (modbus_string_field_is_valid((const char *)data, len) == 0)
         {
-            ch = data[i];
-            temp_buf[i] = ch;
-
-            if (found_nul != 0)
-            {
-                if (ch != 0U)
-                {
-                    is_valid_data = 0;
-                }
-            }
-            else if (ch == 0U)
-            {
-                found_nul = 1;
-            }
-            else if ((ch < 0x20U) || (ch > 0x7EU))
-            {
-                is_valid_data = 0;
-            }
-            else
-            {
-                /* ASCII printable character. */
-            }
+            is_valid_data = 0;
         }
-    }
-
-    if (found_nul == 0)
-    {
-        is_valid_data = 0;
+        (void)memcpy(temp_buf, data, len);
     }
 
     is_all_valid = (is_valid_ptr != 0) && (is_valid_len != 0) &&
@@ -913,10 +885,19 @@ def _build_write_check_cases(workbook: WorkbookData) -> List[str]:
         if entry["type"] == "REG_TYPE_STRING":
             lines.extend(
                 [
+                    "        {",
+                    "            modbus_string_view_t current_value;",
+                    "            modbus_string_view_t new_value;",
+                    "",
+                    "            current_value.data = (const char *)entry->ram_ptr;",
+                    "            current_value.length = modbus_string_field_length(",
+                    "                current_value.data, entry->size);",
+                    "            new_value.data = (const char *)after_value;",
+                    "            new_value.length = modbus_string_field_length(",
+                    "                new_value.data, entry->size);",
                     f"            return modbus_user_write_check_{name}(",
-                    "                (const char *)entry->ram_ptr,",
-                    "                (const char *)after_value,",
-                    "                entry->size);",
+                    "                &current_value, &new_value);",
+                    "        }",
                 ]
             )
         elif entry["is_array"]:
@@ -1035,8 +1016,6 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
         "    const float *min_float;",
         "    const float *max_float;",
         "    union { uint32_t u32; float f; } conv;",
-        "    uint8_t ch;",
-        "    int found_nul;",
         "",
         "    switch (entry->type)",
         "    {",
@@ -1096,29 +1075,13 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
         "            return 0;",
         "",
         "        case REG_TYPE_STRING:",
-        "            found_nul = 0;",
-        "            for (i = 0U; i < entry->size; ++i)",
+        "            if (modbus_string_field_is_valid(",
+        "                    (const char *)data, entry->size) == 0)",
         "            {",
-        "                ch = data[i];",
-        "                ((uint8_t *)after_value)[i] = ch;",
-        "                if (found_nul != 0)",
-        "                {",
-        "                    if (ch != 0U) { return -1; }",
-        "                }",
-        "                else if (ch == 0U)",
-        "                {",
-        "                    found_nul = 1;",
-        "                }",
-        "                else if ((ch < 0x20U) || (ch > 0x7EU))",
-        "                {",
-        "                    return -1;",
-        "                }",
-        "                else",
-        "                {",
-        "                    /* ASCII printable character. */",
-        "                }",
+        "                return -1;",
         "            }",
-        "            return (found_nul != 0) ? 0 : -1;",
+        "            (void)memcpy(after_value, data, entry->size);",
+        "            return 0;",
         "",
         "        default:",
         "            return -1;",
@@ -1163,11 +1126,22 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
     )
     if snapshot_entries:
         for entry in snapshot_entries:
-            base_type = get_base_type(entry["type"])
-            lines.append(
-                f"    snapshot->{entry['name']} = (const {base_type} *)"
-                f"g_reg_table_slave[MODBUS_IDX_{entry['name']}].ram_ptr;"
-            )
+            if entry["type"] == "REG_TYPE_STRING":
+                lines.extend(
+                    [
+                        f"    snapshot->{entry['name']}.data = (const char *)",
+                        f"        g_reg_table_slave[MODBUS_IDX_{entry['name']}].ram_ptr;",
+                        f"    snapshot->{entry['name']}.length = modbus_string_field_length(",
+                        f"        snapshot->{entry['name']}.data,",
+                        f"        g_reg_table_slave[MODBUS_IDX_{entry['name']}].size);",
+                    ]
+                )
+            else:
+                base_type = get_base_type(entry["type"])
+                lines.append(
+                    f"    snapshot->{entry['name']} = (const {base_type} *)"
+                    f"g_reg_table_slave[MODBUS_IDX_{entry['name']}].ram_ptr;"
+                )
     else:
         lines.append("    snapshot->unused = (const uint8_t *)0;")
     lines.extend(
@@ -1183,14 +1157,27 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
         ]
     )
     for entry in snapshot_entries:
-        base_type = get_base_type(entry["type"])
-        lines.extend(
-            [
-                f"        case MODBUS_IDX_{entry['name']}:",
-                f"            snapshot->{entry['name']} = (const {base_type} *)after_value;",
-                "            break;",
-            ]
-        )
+        if entry["type"] == "REG_TYPE_STRING":
+            lines.extend(
+                [
+                    f"        case MODBUS_IDX_{entry['name']}:",
+                    f"            snapshot->{entry['name']}.data = (const char *)after_value;",
+                    f"            snapshot->{entry['name']}.length =",
+                    "                modbus_string_field_length(",
+                    f"                    snapshot->{entry['name']}.data,",
+                    f"                    g_reg_table_slave[MODBUS_IDX_{entry['name']}].size);",
+                    "            break;",
+                ]
+            )
+        else:
+            base_type = get_base_type(entry["type"])
+            lines.extend(
+                [
+                    f"        case MODBUS_IDX_{entry['name']}:",
+                    f"            snapshot->{entry['name']} = (const {base_type} *)after_value;",
+                    "            break;",
+                ]
+            )
     lines.extend(
         [
             "        default:",

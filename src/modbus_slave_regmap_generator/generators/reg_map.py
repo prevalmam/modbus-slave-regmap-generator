@@ -3,7 +3,11 @@ from __future__ import annotations
 import textwrap
 from typing import List
 
-from ..utils import extract_braced_value, format_array_init
+from ..utils import (
+    extract_braced_value,
+    format_array_init,
+    format_string_field_initializer,
+)
 from ..workbook_loader import WorkbookData
 from . import GeneratedFile
 
@@ -73,6 +77,11 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         extern const reg_table_entry_t g_reg_table_slave[];
         extern const uint16_t g_reg_table_slave_size;
 
+        uint16_t modbus_string_field_length(const char *data,
+                                            uint16_t field_size);
+        int modbus_string_field_is_valid(const char *data,
+                                         uint16_t field_size);
+
         #endif
     """
     )
@@ -85,7 +94,13 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         c_text += f"{entry['ram_decl']}\n"
 
         if entry["type"] == "REG_TYPE_STRING":
-            c_text += f"const char default_{entry['name']}[{entry['length']}] = {entry['default_value']};\n"
+            default_init = format_string_field_initializer(
+                entry["default_value"], entry["length"]
+            )
+            c_text += (
+                f"const char default_{entry['name']}[{entry['length']}] = "
+                f"{default_init};\n"
+            )
             continue
 
         value_type = entry["ram_decl"].split()[1]
@@ -132,6 +147,63 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     c_text += (
         "const uint16_t g_reg_table_slave_size = "
         "(uint16_t)(sizeof(g_reg_table_slave) / sizeof(g_reg_table_slave[0]));\n"
+    )
+    c_text += textwrap.dedent(
+        """
+
+        uint16_t modbus_string_field_length(const char *data,
+                                            uint16_t field_size)
+        {
+            uint16_t length = 0U;
+
+            if (data == (const char *)0)
+            {
+                return 0U;
+            }
+            while ((length < field_size) && (data[length] != '\\0'))
+            {
+                ++length;
+            }
+            return length;
+        }
+
+        int modbus_string_field_is_valid(const char *data,
+                                         uint16_t field_size)
+        {
+            uint16_t i;
+            int found_nul = 0;
+            unsigned char ch;
+
+            if ((data == (const char *)0) || (field_size == 0U))
+            {
+                return 0;
+            }
+            for (i = 0U; i < field_size; ++i)
+            {
+                ch = (unsigned char)data[i];
+                if (found_nul != 0)
+                {
+                    if (ch != 0U)
+                    {
+                        return 0;
+                    }
+                }
+                else if (ch == 0U)
+                {
+                    found_nul = 1;
+                }
+                else if ((ch < 0x20U) || (ch > 0x7EU))
+                {
+                    return 0;
+                }
+                else
+                {
+                    /* ASCII printable character. */
+                }
+            }
+            return 1;
+        }
+        """
     )
 
     return [

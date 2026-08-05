@@ -14,9 +14,8 @@ def _write_check_declaration(entry: dict) -> List[str]:
     if entry["type"] == "REG_TYPE_STRING":
         return [
             f"extern modbus_write_result_t modbus_user_write_check_{name}(",
-            "    const char current_value[],",
-            "    const char new_value[],",
-            "    uint16_t size);",
+            "    const modbus_string_view_t *current_value,",
+            "    const modbus_string_view_t *new_value);",
         ]
     if entry["is_array"]:
         return [
@@ -58,11 +57,20 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         "",
         "typedef struct",
         "{",
+        "    const char *data;",
+        "    uint16_t length;",
+        "} modbus_string_view_t;",
+        "",
+        "typedef struct",
+        "{",
     ]
     if snapshot_entries:
         for entry in snapshot_entries:
-            base_type = get_base_type(entry["type"])
-            h_lines.append(f"    const {base_type} *{entry['name']};")
+            if entry["type"] == "REG_TYPE_STRING":
+                h_lines.append(f"    modbus_string_view_t {entry['name']};")
+            else:
+                base_type = get_base_type(entry["type"])
+                h_lines.append(f"    const {base_type} *{entry['name']};")
     else:
         h_lines.append("    const uint8_t *unused;")
     h_lines.extend(

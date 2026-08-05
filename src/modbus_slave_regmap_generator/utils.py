@@ -50,11 +50,20 @@ def format_value_for_init(var_type: str, value: str) -> str:
         return "0"
 
 
+def format_string_field_initializer(value: str, field_size: int) -> str:
+    """Format an ASCII string as an exact-size, zero-padded byte initializer."""
+    encoded = [ord(ch) for ch in value]
+    if len(encoded) > field_size:
+        raise ValueError("string value exceeds fixed field size")
+    encoded.extend([0] * (field_size - len(encoded)))
+    return "{" + ", ".join(f"0x{byte:02X}" for byte in encoded) + "}"
+
+
 def generate_static_definition(var_type: str, var_name: str, count: int, default_str: str) -> str:
     """Create a static C definition for RAM mirrors (scalar or array)."""
     var_type = normalize_type(var_type)
     if var_type == "string":
-        init_val = format_value_for_init(var_type, default_str)
+        init_val = format_string_field_initializer(default_str, count)
         return f"static char {var_name}[{count}] = {init_val};"
 
     init_val = format_value_for_init(var_type, default_str)
