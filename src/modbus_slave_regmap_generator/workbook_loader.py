@@ -73,7 +73,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 (8, "Max"),
                 (9, "Default"),
                 (10, "NVM_Offset"),
-                (11, "WRITE_NOTIFY"),
+                (11, "UPDATE_NOTIFY"),
                 (12, "BUSY_REJECT"),
                 (13, "WRITE_CHECK"),
                 (14, "GROUP_VALIDATE"),
@@ -110,7 +110,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
         reg_addr, var_name, var_type_raw, array_len, access, vmin, vmax, vdef = core_columns
         nvm_offset_cell = row.iloc[10] if len(row) > 10 else None
-        write_notify_cell = row.iloc[11] if len(row) > 11 else None
+        update_notify_cell = row.iloc[11] if len(row) > 11 else None
         busy_reject_cell = row.iloc[12] if len(row) > 12 else None
         write_check_cell = row.iloc[13] if len(row) > 13 else None
         group_validate_cell = row.iloc[14] if len(row) > 14 else None
@@ -124,8 +124,8 @@ def load_workbook_data(file_path: str) -> WorkbookData:
 
         # ── reserved エントリ ────────────────────────────────────────────
         if var_type == "reserved":
-            write_notify_enabled = _parse_bool_cell(
-                write_notify_cell, "WRITE_NOTIFY", i + 1
+            update_notify_enabled = _parse_bool_cell(
+                update_notify_cell, "UPDATE_NOTIFY", i + 1
             )
             busy_reject_enabled = _parse_bool_cell(
                 busy_reject_cell, "BUSY_REJECT", i + 1
@@ -144,7 +144,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 vmax,
                 vdef,
                 nvm_offset_cell,
-                write_notify_enabled,
+                update_notify_enabled,
                 busy_reject_enabled,
                 write_check_enabled,
                 group_validate,
@@ -182,7 +182,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                     "length": num_regs,
                     "access": "ACCESS_READ",
                     "var_type_str": "reserved",
-                    "write_notify": False,
+                    "update_notify": False,
                     "is_array": False,
                     "busy_reject": False,
                     "write_check": False,
@@ -192,8 +192,8 @@ def load_workbook_data(file_path: str) -> WorkbookData:
             continue
         # ────────────────────────────────────────────────────────────────
 
-        write_notify_enabled = _parse_bool_cell(
-            write_notify_cell, "WRITE_NOTIFY", i + 1
+        update_notify_enabled = _parse_bool_cell(
+            update_notify_cell, "UPDATE_NOTIFY", i + 1
         )
         busy_reject_enabled = _parse_bool_cell(
             busy_reject_cell, "BUSY_REJECT", i + 1
@@ -261,11 +261,6 @@ def load_workbook_data(file_path: str) -> WorkbookData:
         )
 
         access_mode = map_access(access)
-        if access_mode == "ACCESS_READ" and write_notify_enabled:
-            raise ValueError(
-                f"RegisterTable row {i + 1} {var_name}: "
-                "WRITE_NOTIFY must be FALSE for a read-only register."
-            )
         if access_mode == "ACCESS_READ" and busy_reject_enabled:
             raise ValueError(
                 f"RegisterTable row {i + 1} {var_name}: "
@@ -298,7 +293,7 @@ def load_workbook_data(file_path: str) -> WorkbookData:
                 "length": count,
                 "access": access_mode,
                 "var_type_str": var_type,
-                "write_notify": write_notify_enabled,
+                "update_notify": update_notify_enabled,
                 "is_array": is_array,
                 "busy_reject": busy_reject_enabled,
                 "write_check": write_check_enabled,
@@ -326,7 +321,7 @@ def _validate_reserved_columns(
     vmax,
     vdef,
     nvm_offset_cell,
-    write_notify_enabled: bool,
+    update_notify_enabled: bool,
     busy_reject_enabled: bool,
     write_check_enabled: bool,
     group_validate,
@@ -344,10 +339,10 @@ def _validate_reserved_columns(
                 f"RegisterTable row {row_number} {var_name}: "
                 f"reserved {col_name} must be '-', got '{actual}'."
             )
-    if write_notify_enabled:
+    if update_notify_enabled:
         raise ValueError(
             f"RegisterTable row {row_number} {var_name}: "
-            "reserved WRITE_NOTIFY must be FALSE."
+            "reserved UPDATE_NOTIFY must be FALSE."
         )
     if busy_reject_enabled:
         raise ValueError(

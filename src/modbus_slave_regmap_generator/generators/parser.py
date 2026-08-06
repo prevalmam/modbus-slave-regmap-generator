@@ -37,7 +37,7 @@ MODBUS_PARSER_SOURCE = """\
 #include "modbus_parser.h"
 #include "modbus_reg_map_slave.h"
 #include "modbus_reg_idx_slave.h"
-#include "modbus_reg_write_event_slave.h"
+#include "modbus_reg_update_notify_slave.h"
 #include "modbus_reg_write_guard_slave.h"
 #include <string.h>
 
@@ -304,10 +304,11 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
 
             		data = &rx_buf[4];
             		status = handle_modbus_multi_write(start_addr, 1U, data);
-            		if (status == 0)
-            		{
+                    if (status == 0)
+                    {
                         modbus_send_write_single_ack(slave_addr, start_addr, data);
-            		}
+                        modbus_reg_update_notify_master_write(start_addr, 1U);
+                    }
             		else
             		{
                         modbus_send_exception_response(slave_addr, function, (uint8_t)status);
@@ -346,10 +347,11 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                     	data = &rx_buf[7];
 
                     	status = handle_modbus_multi_write(start_addr, num_regs, data);
-                    	if (status == 0)
-                    	{
-                    		modbus_send_write_multi_ack(slave_addr, start_addr, num_regs);
-                    	}
+                        if (status == 0)
+                        {
+                            modbus_send_write_multi_ack(slave_addr, start_addr, num_regs);
+                            modbus_reg_update_notify_master_write(start_addr, num_regs);
+                        }
                     	else
                     	{
                             modbus_send_exception_response(slave_addr, function, (uint8_t)status);
@@ -1327,7 +1329,6 @@ def _build_atomic_write_source(workbook: WorkbookData) -> str:
             "                                        entry->size);",
             "            }",
             "        }",
-            "        modbus_reg_write_event_mark(table_index);",
             "        expected = (uint16_t)(expected + entry_register_count(entry));",
             "    }",
             "    return 0;",

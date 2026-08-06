@@ -5,8 +5,7 @@
 - send/request フレーム生成用関数
 - reply フレームの parse ＋値チェック処理
 - レジスタアクセス用 getter/setter 関数
-- ビット変化／値変化を検出するエッジ検出関数  
-  （rising/falling/toggled など）
+- 正常なMaster write／内部setter成立後の同期callback
 
 といった，Modbus 通信まわりの定型コード一式を自動生成するツールです。
 
@@ -27,7 +26,7 @@ Modbus のレジマップやプロトコル部分は仕様書で厳密に決ま�
 - レジスタ定義
 - アクセッサ
 - 送受信ハンドラ
-- エッジ検出処理
+- 更新通知callback
 
 を丸ごと再生成できます。  
 プロトコルとして厳格に決まっている部分を自動生成に任せることで，  
@@ -106,11 +105,11 @@ msrg
 
 1. 送信ドライバ差し込み（`modbus_sender_output` 実装）
 2. NVMドライバ差し込み
-3. 初期化（エッジ検出関数の初期化）
+3. RAM実値の初期化
 4. 送信処理（read/write リクエストを送る）
 5. 受信処理（応答フレームを受信し、パースし、NVM 反映）
 6. 値の参照・更新（getter/setter でアプリ側からアクセス）
-7. エッジ検出（値の変化を検出し、アプリイベントとして処理）
+7. 更新通知（Master write／内部setter成立後のcallback処理）
 ---
 
 ### 4.1 送信ドライバ差し込み（`modbus_sender_output` 実装）
@@ -311,82 +310,104 @@ set_device_name("SENSOR-A");
     uint16_t max_mode = get_device_mode_max();
 ---
 
-### 4.7 Master write 通知
+### 4.7 更新通知
 
-RegisterTable の `WRITE_NOTIFY` を `TRUE` にすると、Modbus Masterから正常に
-受理したwrite要求をアプリ側で取得する関数が生成されます。
-
-```c
-if (consume_device_mode_written() != 0)
-{
-    uint16_t value = get_device_mode();
-    app_apply_device_mode(value);
-}
-```
-
-`consume_<VarName>_written()`はラッチされた通知を返してクリアします。一度
-writeを受理すると、別の変数へのwriteが発生しても、対象のconsume関数が
-呼ばれるまで通知は保持されます。
-
-通常は、アプリ側にwrite通知をまとめて処理する関数を用意します。
+RegisterTableの`UPDATE_NOTIFY`を`TRUE`にすると、正常に受理したModbus
+Master writeと、正常終了した生成setterの両方から同期的に呼び出すユーザー
+callbackの宣言と呼出コードが生成されます。これは値変化の通知ではなく、正常な
+更新操作の成立通知です。現在値と同じ値をwriteまたはsetした場合も毎回通知します。
 
 ```c
-static void app_dispatch_modbus_writes(void)
+typedef enum
 {
-    if (consume_device_mode_written() != 0)
-    {
-        uint16_t value = get_device_mode();
-        app_apply_device_mode(value);
-    }
+    MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE = 1,
+    MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET = 2
+} modbus_reg_update_source_t;
 
-    if (consume_start_command_written() != 0)
+void modbus_user_device_mode_updated(modbus_reg_update_source_t source)
+{
+    if (source == MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE)
     {
-        uint16_t command = get_start_command();
-        app_handle_start_command(command);
+        app_apply_device_mode(get_device_mode());
     }
 }
 ```
 
-呼び出し順序や実行タイミングはアプリ側で決定します。一般的には受信処理後に
-呼び出せます。
+callbackにはweakな空実装を生成しません。`UPDATE_NOTIFY=TRUE`にしたすべての
+変数について、ユーザープロジェクト側で`modbus_user_<VarName>_updated()`を
+実装してください。未実装の場合はリンクエラーになります。
 
-```c
-modbus_parse_and_reply(frame, len);
-app_dispatch_modbus_writes();
-```
+#### Master writeの呼出順序
 
-baudrate、parity、UART再初期化、再起動など、write応答の送信完了前に実行
-すると通信へ影響する処理は、UARTのTX完了後など安全なタイミングでconsume
-してください。通知はconsumeされるまで保持されるため、受信直後に処理する
-必要はありません。
+Write Single（0x06）／Write Multiple（0x10）が正常に受理された場合、生成
+parserは次の順序で処理します。
 
-```c
-void app_on_modbus_tx_complete(void)
-{
-    if (consume_modbus_baudrate_written() != 0)
-    {
-        app_request_modbus_config_update(get_modbus_baudrate());
-    }
-}
-```
+1. 書込み対象、アクセス権、`BUSY_REJECT`、Min/Max、`WRITE_CHECK`、
+   `GROUP_VALIDATE`を検証する。
+2. 対象をRAMへ反映し、値が変化したNVM対象には
+   `NVM_Request_Write_Bytes()`を呼ぶ。
+3. `ModbusPort_RequestSend()`へ正常ACKの送信を要求する。
+4. `UPDATE_NOTIFY=TRUE`の対象ごとに、
+   `MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE`を渡してcallbackを同期的に呼ぶ。
+5. すべてのcallbackがreturnした後、`modbus_parse_and_reply()`がreturnする。
 
-- Write Single（0x06）とWrite Multiple（0x10）の両方を通知します。
-- 現在値と同じ値がwriteされた場合も通知します。
-- BUSY_REJECT、WRITE_CHECK、GROUP_VALIDATEなどで拒否したwriteは通知しません。
-- Write Multipleでは、要求に含まれる各変数を個別に通知します。
-- consume前に同じ変数へ複数回writeされた場合、通知は1件に集約されます。
-  `get_<VarName>()`では最後に受理された値を取得できます。
-- 内部処理からの`set_<VarName>()`は通知しません。内部設定後の副作用は
-  setterの呼び出し元から明示的に実行してください。
+`ModbusPort_RequestSend()`のreturnは、UARTやDMAによる物理的なACK送信完了を
+意味しません。生成器が保証するのは、ACKの**送信要求後**にcallbackを呼ぶ
+ことまでです。
+
+Write Multipleでは、全対象をコミットしてACK送信を要求した後、対象変数を
+レジスタアドレス昇順に1回ずつ通知します。最初のcallbackから、同じ要求に
+含まれるほかの変数も更新後の値として参照できます。
+
+拒否したwriteでは正常ACKも更新callbackも呼びません。callbackが呼ばれる
+時点では書込み受理とACK送信要求が完了しているため、callbackからwriteを
+拒否することはできません。拒否条件は`BUSY_REJECT`、`WRITE_CHECK`、
+`GROUP_VALIDATE`へ実装してください。
+
+#### 内部setterの呼出順序
+
+生成された`set_<VarName>()`は、引数検証に成功した後、必要ならRAM更新と
+NVM書込み要求を行い、`MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET`を渡して
+callbackを同期的に呼びます。callbackがreturnした後にsetterが`1`を返します。
+
+- 同値setでもcallbackを呼びますが、RAM更新とNVM書込み要求は省略します。
+- 範囲外の値、不正な配列index、不正な文字列などでsetterが`0`を返す場合は
+  callbackを呼びません。
+- `set_<VarName>_masked()`は通常setterへ委譲するため、通知は1回です。
 - 配列は要素単位ではなく変数単位で通知します。
-- write通知に初期化関数は不要です。
-- parserとconsume関数はmain loopなど同じ実行コンテキストから直列に
-  呼び出してください。ISRや別タスクから同時に操作する場合は、呼び出し側で
-  排他制御が必要です。
+- `UPDATE_NOTIFY=FALSE`のsetterはcallbackを呼びません。
 
-`consume_<VarName>_written()`は呼び出した時点で通知をクリアします。同じ
-変数の通知を複数箇所でconsumeすると、最初に呼び出した箇所だけが`1`を
-取得します。各変数のconsume担当箇所は1か所に決めてください。
+#### callback利用上の注意
+
+callbackはparserまたはsetterの呼出元コンテキストで同期実行されます。生成器は
+キューイング、タスク切替、排他制御、再入防止、実行時間監視を行いません。
+
+- callbackが長時間ブロックすると、parserまたはsetterもreturnしません。
+- callbackから`UPDATE_NOTIFY=TRUE`の別変数のsetterを呼ぶと、そのcallbackへ
+  同期的に入ります。深いcallbackチェーンや循環呼出しに注意してください。
+- callbackから同じ変数のsetterを呼ぶと、同値でも再通知するため無限再帰に
+  なります。
+- Write Multipleのcallbackから、後でMaster write通知される別変数のsetterを
+  呼んだ場合、その変数には`INTERNAL_SET`、続いて`MASTER_WRITE`のcallbackが
+  呼ばれる場合があります。
+- callback内のgetterは、Master write直後のsnapshotではなく、呼出時点の
+  最新RAM値を返します。
+
+baudrate、parity、UART再初期化、再起動など、ACK送信完了前に行うと通信へ
+影響する処理は、callbackでは要求フラグだけを立て、UARTのTX完了を確認して
+から実行してください。
+
+```c
+void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
+{
+    (void)source;
+    s_modbus_config_update_requested = 1U;
+}
+```
+
+`NVM_Request_Write_Bytes()`には完了結果がないため、callbackはNVM永続化完了を
+保証しません。また、生成RAM変数や`g_reg_table_slave[].ram_ptr`へ直接代入した
+場合は通知しません。通知対象は正常なMaster writeと生成setterだけです。
 
 
 ## 5.詳細仕様
@@ -408,20 +429,20 @@ void app_on_modbus_tx_complete(void)
 | `Max` | `3` | 許容最大値（境界チェックで使用） |
 | `Default` | `0` | 初期値 |
 | `NVM_Offset` | `-` / `0x0000` / `16` | `-` の場合は NVM に保存しない。数値の場合は NVM 領域先頭からのバイトオフセット |
-| `WRITE_NOTIFY` | `TRUE`/`FALSE` | TRUE の場合、正常に受理したMaster writeのconsume関数を生成する |
+| `UPDATE_NOTIFY` | `TRUE`/`FALSE` | TRUE の場合、正常なMaster write／内部setter成立後に同期callbackを呼ぶ |
 | `BUSY_REJECT` | `TRUE`/`FALSE` | TRUE の場合、レジスタ単位のbusy状態によるModbus書込み拒否APIを生成する |
 | `WRITE_CHECK` | `TRUE`/`FALSE` | TRUE の場合、型付きユーザー書込み判定関数を呼び出す |
 | `GROUP_VALIDATE` | `-` / グループ名 | 同じグループ名のレジスタを仮更新後の値で検証する |
 
 `NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
 
-`WRITE_NOTIFY`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。`WRITE_NOTIFY=TRUE`はModbus経由で書込み可能なレジスタだけに指定できます。
+`UPDATE_NOTIFY`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。`UPDATE_NOTIFY=TRUE`はread-onlyレジスタにも指定できます。その場合は内部setterからだけ通知されます。
 
 ##### 文字列レジスタ
 
 文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。RAM、NVM、Modbus 上では `ArrayLen` byte の固定長フィールドとして扱い、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | WRITE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | UPDATE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
 |---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
 | `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `TRUE` | `FALSE` | `TRUE` | `DEVICE` |
 
@@ -434,7 +455,7 @@ void app_on_modbus_tx_complete(void)
 - `Default` は ASCII printable 文字のみ指定できます。空欄は許可しません（入力漏れと区別するため）。
 - `Default` を空文字列にしたい場合は `-` を指定してください。リテラルの `-` という文字列をDefaultにしたい場合は `"-"` のようにダブルクォートで囲みます。
 - `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
-- `WRITE_NOTIFY`を`TRUE`にすると、文字列レジスタへの正常なMaster writeも通知できます。
+- `UPDATE_NOTIFY`を`TRUE`にすると、文字列レジスタへの正常なMaster writeと内部setterの両方を通知できます。
 - Modbus Write では、途中に NUL がある場合はNUL以降がすべて `0x00` paddingであるデータを受け付けます。NULがない場合は、全 `ArrayLen` byteがASCII printable文字であれば最大長の文字列として受け付けます。
 
 固定長フィールドは、最大長まで文字が格納されている場合にNUL終端されません。内部RAMやModbusデータをC文字列として直接扱わず、`strlen()`、`strcmp()`、`printf("%s", ...)`などへ渡す前に、`ArrayLen + 1` byte以上のバッファへコピーして末尾にNULを追加してください。生成される`get_<VarName>_copy()`はこの変換を行います。
@@ -445,12 +466,12 @@ void app_on_modbus_tx_complete(void)
 
 連続するアドレスブロックを master が一括 Read する際、途中に何も割り当てていないアドレスが存在する場合は `Type` に `reserved` を指定します（大文字小文字は問いません）。
 
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | WRITE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
+| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | UPDATE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
 |---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
 | `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `FALSE` | `FALSE` | `FALSE` | `-` |
 
 - `ArrayLen` は **Modbus レジスタ数**（1 = 2 byte）で指定します。`2` であれば 1173〜1174 の 2 レジスタ分を予約します。
-- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`WRITE_NOTIFY` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
+- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`UPDATE_NOTIFY` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
 - `VarName` は記述必須ですが、C 識別子の制約はありません（ドキュメント用途）。
 
 **生成物への影響**
@@ -606,13 +627,15 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 | `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
 | `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、typed snapshot |
 
-#### 5.3.2.Master write通知
+#### 5.3.2.更新通知
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
-| `modbus_reg_write_event_slave.c/h` | `WRITE_NOTIFY=TRUE`のレジスタに対するラッチ型write通知とconsume関数 |
+| `modbus_reg_update_notify_slave.c/h` | `UPDATE_NOTIFY=TRUE`のレジスタに対する同期callback宣言と通知振り分け |
 
-旧schemaの`modbus_reg_edge_slave.c/h`が出力先に存在する場合は、再生成時に削除されます。
+旧schemaの`modbus_reg_edge_slave.c/h`または`modbus_reg_write_event_slave.c/h`が
+出力先に存在する場合は、再生成時に削除されます。`EDGE`と`WRITE_NOTIFY`列、
+および旧consume APIとの互換性はありません。
 
 #### 5.3.3.受信処理
 

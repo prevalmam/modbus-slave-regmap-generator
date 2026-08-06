@@ -25,7 +25,7 @@ HEADERS = [
     "Max",
     "Default",
     "NVM_Offset",
-    "WRITE_NOTIFY",
+    "UPDATE_NOTIFY",
     "BUSY_REJECT",
     "WRITE_CHECK",
     "GROUP_VALIDATE",

@@ -73,6 +73,7 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         '#include "modbus_reg_access_slave.h"',
         '#include "modbus_reg_map_slave.h"',
         '#include "modbus_reg_idx_slave.h"',
+        '#include "modbus_reg_update_notify_slave.h"',
     ]
     if has_string:
         access_c_lines.append("#include <string.h>")
@@ -212,15 +213,17 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("    (void)memset(temp, 0, sizeof(temp));")
             access_c_lines.append("    (void)memcpy(temp, value, len);")
             access_c_lines.append("")
-            access_c_lines.append("    if (memcmp(ram, temp, sizeof(temp)) == 0)")
+            access_c_lines.append("    if (memcmp(ram, temp, sizeof(temp)) != 0)")
             access_c_lines.append("    {")
-            access_c_lines.append("        return 1;")
-            access_c_lines.append("    }")
-            access_c_lines.append("")
-            access_c_lines.append("    (void)memcpy(ram, temp, sizeof(temp));")
+            access_c_lines.append("        (void)memcpy(ram, temp, sizeof(temp));")
             access_c_lines.append(
-                f"    write_nvm_if_used({entry_ref}.nvm_offset, ram, {entry_ref}.size);"
+                f"        write_nvm_if_used({entry_ref}.nvm_offset, ram, {entry_ref}.size);"
             )
+            access_c_lines.append("    }")
+            if entry["update_notify"]:
+                access_c_lines.append(
+                    f"    modbus_reg_update_notify_internal_set({idx_macro});"
+                )
             access_c_lines.append("    return 1;")
             access_c_lines.append("}")
             access_c_lines.append("")
@@ -273,31 +276,33 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         if is_array:
             access_c_lines.append("    current = ram[index];")
 
-        access_c_lines.append("    if (value == current)")
+        access_c_lines.append("    if (value != current)")
         access_c_lines.append("    {")
-        access_c_lines.append("        return 1;")
-        access_c_lines.append("    }")
-
         if is_array:
-            access_c_lines.append("    ram[index] = value;")
-            access_c_lines.append(f"    if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
-            access_c_lines.append("    {")
+            access_c_lines.append("        ram[index] = value;")
+            access_c_lines.append(f"        if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
+            access_c_lines.append("        {")
             access_c_lines.append(
-                f"        nvm_offset = (uint16_t)({entry_ref}.nvm_offset + "
+                f"            nvm_offset = (uint16_t)({entry_ref}.nvm_offset + "
                 f"(uint16_t)(index * sizeof({base_type})));"
             )
             access_c_lines.append(
-                "        write_nvm_if_used(nvm_offset, &ram[index], "
+                "            write_nvm_if_used(nvm_offset, &ram[index], "
                 "(uint16_t)sizeof(value));"
             )
-            access_c_lines.append("    }")
+            access_c_lines.append("        }")
         else:
-            access_c_lines.append(f"    {write_func}({entry_ref}.ram_ptr, value);")
+            access_c_lines.append(f"        {write_func}({entry_ref}.ram_ptr, value);")
             access_c_lines.append(
-                f"    write_nvm_if_used({entry_ref}.nvm_offset, {entry_ref}.ram_ptr, "
+                f"        write_nvm_if_used({entry_ref}.nvm_offset, {entry_ref}.ram_ptr, "
                 "(uint16_t)sizeof(value));"
             )
+        access_c_lines.append("    }")
 
+        if entry["update_notify"]:
+            access_c_lines.append(
+                f"    modbus_reg_update_notify_internal_set({idx_macro});"
+            )
         access_c_lines.append("    return 1;")
         access_c_lines.append("}")
 
