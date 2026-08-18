@@ -226,7 +226,7 @@ WRITE_CHECK（2.2）との違いは，判定ロジックすら書かなくてい
 
 素朴に実装すると，Modbus 受信処理とローカル操作の処理それぞれに「時刻が確定したら RTC 書き込み関数を呼ぶ」という分岐を別々に書くことになり，呼び出し経路がコードのあちこちに散らばってしまいます。
 
-本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，Master からの書き込みとアプリ側からの更新の両方が，自動生成された同じ setter を経由するようになります。そこから先，実際に RTC へ書き込む処理だけをアプリ側で実装すれば完成です。
+本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，Master からの書き込みと，アプリ側からの `set_current_time()` 呼び出しの両方から，同じユーザーコールバックが呼ばれるようになります。呼び出し元がどちらだったかはコールバックに渡される `source` 引数で判別できるので，必要なら経路ごとに分岐することもできます。そこから先，実際に RTC へ書き込む処理だけをアプリ側で実装すれば完成です。
 
 ```mermaid
 graph LR
@@ -234,16 +234,16 @@ graph LR
     B(["実機の画面＋操作キー<br/>(時刻合わせして確定)"])
 
     subgraph GEN["自動生成パート"]
-        S["set_current_time()<br/>(自動生成されたsetter)"]
+        CB["同じユーザーコールバックを呼ぶ"]
     end
 
     subgraph APP["アプリ実装パート"]
         C["RTCへ実際に書き込む処理"]
     end
 
-    A --> S
-    B --> S
-    S --> C
+    A --> CB
+    B --> CB
+    CB --> C
 
     classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
     classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
@@ -251,7 +251,7 @@ graph LR
     class APP appPart
 ```
 
-アプリ側は「RTCへの書き込み」という中身だけを実装すればよく，「いつ呼ばれるか」「どちらの経路から来たか」を気にする必要はありません。
+アプリ側は「RTCへの書き込み」という中身だけを実装すればよく，「いつ呼ばれるか」を自分で配線する必要はありません。経路を区別したい場合だけ，渡された `source` を見れば済みます。
 
 ### 2.5 レジスタペアをまとめて検証する配線を代行する
 
@@ -497,42 +497,41 @@ msrg
 
 生成されたコードは、以下のステップで使用します。
 
-1. 送信ドライバ差し込み（`modbus_sender_output` 実装）
+1. 送信フック差し込み（`ModbusPort_RequestSend` 実装）
 2. NVMドライバ差し込み
 3. RAM実値の初期化
-4. 送信処理（read/write リクエストを送る）
-5. 受信処理（応答フレームを受信し、パースし、NVM 反映）
-6. 値の参照・更新（getter/setter でアプリ側からアクセス）
-7. 更新通知（Master write／内部setter成立後のcallback処理）
+4. 受信処理（Master からのリクエストフレームを受信し，パースし，応答を送信）
+5. 値の参照・更新（getter/setter でアプリ側からアクセス）
+6. 更新通知（Master write／内部setter成立後のcallback処理）
 ---
 
-### 5.1 送信ドライバ差し込み（`modbus_sender_output` 実装）
+### 5.1 送信フック差し込み（`ModbusPort_RequestSend` 実装）
 
-生成コード一式のうち、実機へフレームを吐き出す処理だけはユーザー側で書き足す必要があります。`modbus_sender_generic.c` 冒頭には次のような extern 宣言だけが置かれています。
+生成コード一式のうち、実機へフレームを吐き出す処理だけはユーザー側で書き足す必要があります。`modbus_parser.h` 冒頭には次のような extern 宣言だけが置かれています。
 
 ```c
-extern void modbus_sender_output(const uint8_t *data, uint16_t len);
+extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
 ```
 
-この関数に UART / RS-485 / TCP など、実際の送信ドライバを呼び出すコードを実装してください。最低限の手順は以下のとおりです。
+この関数は、Read 応答・Write ACK・例外応答・診断エコーなど，`modbus_parse_and_reply()` がフレームを返送する必要があるたびに内部から呼び出されます。UART / RS-485 / TCP など、実際の送信ドライバを呼び出すコードを実装してください。最低限の手順は以下のとおりです。
 
-1. 生成物中から上記シグネチャのスタブ（もしくはヘッダ宣言）を探し、自プロジェクトの送信モジュールにコピーする。
-2. TX イネーブルや CRC 追加など、物理層に必要な処理を行ったうえで `data` バッファを `len` バイト分送信する。
+1. `modbus_parser.h` の extern 宣言と同じシグネチャで、自プロジェクトの送信モジュールに実体を実装する。
+2. TX イネーブルや CRC 追加など、物理層に必要な処理を行ったうえで `frame` バッファを `length` バイト分送信する。
 3. 送信完了待ちや半二重制御（DE/RE 制御）が必要な場合は、この関数内で完結させる。
 
 参考までに、RS-485 ＋ DMA 送信を想定した最小実装例は以下です。
 
 ```c
-void modbus_sender_output(const uint8_t *data, uint16_t len)
+void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length)
 {
     rs485_set_tx_enable(true);
-    uart_dma_send(data, len);
+    uart_dma_send(frame, length);
     uart_dma_wait_for_complete();
     rs485_set_tx_enable(false);
 }
 ```
 
-このフックを埋めておけば、以降の送信 API（read/write リクエスト）はすべて生成コードだけで完結します。
+このフックを埋めておけば、以降の応答送信はすべて生成コードだけで完結します。
 
 ### 5.2 NVMドライバ差し込み
 
@@ -604,71 +603,41 @@ void NVM_Request_Write_Bytes(uint16_t offset,
 
 write通知を含むその他の生成ファイルは静的領域がゼロ初期化されるため、追加の初期化は不要です。
 
-### 5.4 送信処理（Request の送信）
+### 5.4 受信処理とパースと応答送信
 
-生成コード側では、各レジスタブロックごとに **read 系 (`modbus_sender_req_*`)** と **write 系 (`modbus_sender_set_*`)** の 2 本立て API が自動生成されます。`MODBUS_SLAVE_ADDR` は Excel の Config シートから取得され、すべての送信フレームに自動で組み込まれます。
-
-#### 5.4.1 Read Request（0x03）
-- 監視したいブロックに対して `modbus_sender_req_<VarName>()` を呼び出すだけで、Function Code 0x03 のフレームが生成されます。
-- 送信バッファは `modbus_sender_output()` へそのまま受け渡されるため、ユーザーは UART／RS-485 ドライバ内で実際の TX を完了させます。
-
-```c
-void poll_uptime_sec(void)
-{
-    modbus_sender_req_uptime_sec();         /* Excel で定義した block 名に応じた関数名が生成される */
-}
-```
-
-#### 5.4.2 Write Request（0x10）
-
-- アプリ側で RAM 上の値を setter で更新したあと、`modbus_sender_set_<VarName>()` を呼び出すと Function Code 0x10（Write Multiple Registers）が組み立てられます。
-- データ型ごとに `modbus_sender_generic_u16/u32/float()` が内部で選択され、必要なバイト長や配列展開をすべて自動で行います。
-- 配列レジスタの場合もブロック全体を 1 パケットで送るのが基本です。
-
-```c
-void update_device_mode(uint16_t new_value)
-{
-    set_device_mode(new_value);             /* RAM を最新値で更新 */
-    modbus_sender_set_device_mode();        /* 直近ブロックを丸ごと 0x10 で送信 */
-}
-```
-
----
-
-### 5.5 受信処理とパースと NVM 反映
-
-応答フレームを受信したら、reply_handler に渡すだけで完了します。
+Master からのリクエストフレームを受信したら，`modbus_parse_and_reply()` に渡すだけで完了します。応答フレーム（ACK・例外応答を含む）の送信も，この関数の内部で 5.1 の `ModbusPort_RequestSend()` を通じて自動的に行われます。
 
     if (rx_complete) {
-        modbus_reply_handler_slave(rx_buf, rx_len);
+        modbus_parse_and_reply(rx_buf, rx_len);
     }
 
 パース後に自動的に行われる処理：
 
 - CRC の検証
-- Function Code の判定
+- Function Code の判定（0x03 Read／0x06,0x10 Write／0x08 診断）
 - レジスタ値の展開
 - Min/Max チェック
 - RAM（g_reg_table_slave[]）への反映
 - NVM 書き込み要求（値が変化し、NVM_Offset にオフセットを指定した場合）
+- 応答フレームの生成と送信
 
 ---
 
-### 5.6 レジスタアクセス（getter / setter）
+### 5.5 レジスタアクセス（getter / setter）
 
-#### 5.6.1 値の読み出し（getter）
+#### 5.5.1 値の読み出し（getter）
 
     uint16_t mode = get_device_mode();
     float process_value = get_process_value();
 
-#### 5.6.2 値の書き換え（setter）
+#### 5.5.2 値の書き換え（setter）
 
     set_device_mode(2);
     set_process_value(36.5f);
 
 setter は min/max チェックを自動で行います。範囲外の値をセットしようとした場合は何も変更されません。値が現在値と異なる場合は RAM を更新し、`NVM_Offset` が有効なエントリでは `NVM_Request_Write_Bytes()` で NVM にも反映します。同じ値をセットした場合は成功扱いで戻りますが、RAM/NVM への書き込みは行いません。
 
-#### 5.6.3 文字列レジスタのアクセス
+#### 5.5.3 文字列レジスタのアクセス
 
 `Type` に `string` または `CHAR` を指定したレジスタでは、数値用の min/max 取得関数は生成されず、文字列専用のアクセサが生成されます。
 
@@ -698,13 +667,13 @@ set_device_name("SENSOR-A");
 
 内部 RAM は `ArrayLen` byte の固定長フィールドであり、最大長まで文字が格納されている場合はフィールド内に NUL がありません。そのため、内部 RAM や Modbus から読み出した固定長データを `strlen()`、`strcmp()`、`printf("%s", ...)` などの C 標準文字列関数へ直接渡してはいけません。標準文字列関数を使用する場合は、必ず `get_<VarName>_copy()` で `ArrayLen + 1` byte 以上のバッファへコピーし、NUL 終端された C 文字列に変換してから渡してください。
 
-#### 5.6.4 下限値・上限値の取得
+#### 5.5.4 下限値・上限値の取得
 
     uint16_t min_mode = get_device_mode_min();
     uint16_t max_mode = get_device_mode_max();
 ---
 
-### 5.7 更新通知
+### 5.6 更新通知
 
 RegisterTableの`UPDATE_NOTIFY`を`TRUE`にすると、正常に受理したModbus
 Master writeと、正常終了した生成setterの両方から同期的に呼び出すユーザー
