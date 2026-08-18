@@ -32,7 +32,401 @@ Modbus のレジマップやプロトコル部分は仕様書で厳密に決ま�
 プロトコルとして厳格に決まっている部分を自動生成に任せることで，  
 エンジニアはアプリケーションロジックに集中し，思わぬミスを根本から減らすことを狙っています。
 
-## 2.対象とする環境
+## 2.シナリオ
+
+生成されるコードは，Modbus フレームの送受信だけでなく，「値が更新されたらこう処理したい」といった，実装のたびに手で書きがちな定型パターンもカバーします。ここでは代表的なシナリオを紹介します（今後追加予定）。詳しい設定方法は「6.詳細仕様」を参照してください。
+
+以降の図では，本ツールが生成するコードを太枠のオレンジで **自動生成パート**，ユーザーが実装するコードを控えめな緑で **アプリ実装パート** として，共通の配色で表します。
+
+### 2.1 もっとも定型的でやりたくない部分を代行する
+
+Modbus スレーブとしての基本的な受信処理を考えてみます。Master から書き込みフレームが送られてくると，実機側では大きく分けて次の処理が必要です。
+
+1. UART/RS-485 などから実際にバイト列を受信する（HAL層）
+2. 受信したフレームをパースし，CRC・アドレス・型・Min/Max を検証して RAM へ反映する。必要なら NVM への書込み要求も行う
+3. OK（ACK）または NG（例外応答）のリプライフレームを組み立てる
+4. リプライフレームを実際に送信する（HAL層）
+
+このうち，1 と 4 の「実機の UART/RS-485 を直接触る」部分はハードウェアやボード構成に強く依存するため，汎用的に自動生成することはできません。一方，2 と 3 の「決まったルールに従ってバイト列を検証・変換する」部分は，仕様書（Excel）さえ決まっていれば機械的に導出できる領域であり，かつ人力で書くと最もミスが起きやすい部分でもあります。
+
+本ツールは，まさにこの「機械化しやすく，かつ人力でやりたくない」核の部分──パース・検証・RAM反映・NVM 呼び出し経路の確保・リプライ生成──を丸ごと代行します。ユーザーが実装するのは，実機依存の HAL 層（データの受信と送信）だけです。
+
+```mermaid
+graph LR
+    T(["Masterが書き込みフレームを送信"])
+
+    subgraph HAL_RX["アプリ実装パート（HAL受信）"]
+        RX["UART/RS-485で受信データを収集"]
+    end
+
+    subgraph GEN["自動生成パート"]
+        P["パース・CRC検証・RAM反映<br/>（必要ならNVM書込み要求）"]
+        R["OK/NGリプライフレーム生成"]
+        P --> R
+    end
+
+    subgraph HAL_TX["アプリ実装パート（HAL送信）"]
+        TX["UART/RS-485で実際に送信"]
+    end
+
+    T --> RX --> P
+    R --> TX
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN genPart
+    class HAL_RX,HAL_TX appPart
+```
+
+### 2.2 「通していいか」をアプリに聞く配線を代行する
+
+操作要求レジスタがあり，Master から次の値を書き込めるとします。
+
+| 値 | 意味 |
+|----|------|
+| 1  | 停止 |
+| 2  | 測定 |
+| 3  | 校正 |
+
+実機が「測定」で動作している最中に，Master から校正要求が書き込まれたとします。測定中に校正へ直接遷移するのは許可したくないので，アプリ側の状態判定ロジックがこれを拒否し，スレーブは NG（異常応答）を返します。
+
+続けて Master が停止を書き込むと，今度は許可された遷移なので，アプリ側の状態判定ロジックが受け入れ，スレーブは OK（正常応答）を返します。
+
+これは，書き込まれた値そのもの（Min/Max の範囲内かどうか）だけでは判断できません。「今の状態」と「書き込まれようとしている値」の組み合わせを見て初めて合否が決まる判断です。
+
+素朴に実装すると，受信処理の中に「このレジスタが書き込まれたら，現在の状態を見て許可された遷移かどうかをチェックし，ダメなら Exception 応答を返す」という分岐を自分で書き込むことになります。
+
+本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，書き込み要求のたびに現在値と新しい値をセットでアプリ側の判定関数へ渡し，その戻り値に応じて OK/NG のリプライを自動生成するコードが生成されます。アプリ側は「その遷移を許可するかどうか」を判断する状態遷移ロジックだけを実装すればよく，Exception 応答の組み立てや送信経路は考える必要がありません。
+
+**拒否されるケース（測定中に校正要求を書き込む）**
+
+```mermaid
+graph LR
+    W(["Masterが3:校正要求を書き込む"])
+
+    subgraph GEN1["自動生成パート"]
+        Q["modbus_user_write_check_opmode()<br/>へ現在値・新しい値を渡す"]
+    end
+
+    subgraph APP["アプリ実装パート（状態遷移図）"]
+        direction LR
+        S_STOP(("停止"))
+        S_MEAS(("測定"))
+        S_CAL(("校正"))
+        S_STOP --> S_MEAS
+        S_MEAS --> S_STOP
+        S_STOP --> S_CAL
+        S_CAL --> S_STOP
+    end
+
+    subgraph GEN2["自動生成パート"]
+        RNG["NG応答を生成・送信"]
+    end
+
+    W --> Q --> APP --> RNG
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN1,GEN2 genPart
+    class APP appPart
+
+    style S_MEAS fill:#ffe27a,stroke:#c9922b,stroke-width:4px,color:#5c3d00
+```
+
+**受理されるケース（測定中に停止を書き込む）**
+
+```mermaid
+graph LR
+    W2(["Masterが1:停止を書き込む"])
+
+    subgraph GEN3["自動生成パート"]
+        Q2["modbus_user_write_check_opmode()<br/>へ現在値・新しい値を渡す"]
+    end
+
+    subgraph APP2["アプリ実装パート（状態遷移図）"]
+        direction LR
+        S2_STOP(("停止"))
+        S2_MEAS(("測定"))
+        S2_CAL(("校正"))
+        S2_STOP --> S2_MEAS
+        S2_MEAS --> S2_STOP
+        S2_STOP --> S2_CAL
+        S2_CAL --> S2_STOP
+    end
+
+    subgraph GEN4["自動生成パート"]
+        ROK["OK応答を生成・送信"]
+    end
+
+    W2 --> Q2 --> APP2 --> ROK
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN3,GEN4 genPart
+    class APP2 appPart
+
+    style S2_MEAS fill:#ffe27a,stroke:#c9922b,stroke-width:4px,color:#5c3d00
+    linkStyle 1 stroke:#c9922b,stroke-width:4px
+```
+
+アプリ側が実装するのは，状態遷移図で表される「その遷移を許可するかどうか」の判断だけです。呼び出しの配線と応答の生成は，どちらのケースでも自動生成コードが担います。
+
+### 2.3 「今は触るな」を1本のフラグで済ませる
+
+時刻レジスタは，Modbus 経由でも，実機の画面＋操作キーでも変更できるとします。
+
+実機の画面で時刻を編集している最中に，Master から同じ時刻レジスタへ Modbus 書き込みが来てしまうと，画面上の編集内容と競合してしまいます。編集中はアプリ側の都合で，一時的に Modbus からの書き込みを拒否したくなります。
+
+1. アプリが画面上で時刻編集を開始する
+2. アプリは，時刻レジスタだけを「今は拒否」と自動生成パートに伝える（フラグを1つ立てるだけ）
+3. Master が時刻を書き込もうとするが，busy として拒否される
+4. 画面上で時刻編集が確定する
+5. アプリは拒否を解除する
+6. Master が時刻を書き込むと，今度は正常に受理される
+
+素朴に実装すると，受信処理の中で「このレジスタは今アプリが編集中かどうか」を毎回チェックし，該当すれば Exception 応答を組み立てて返す，という分岐を自分で書くことになります。
+
+本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，レジスタ単位の拒否状態を持つビットと，それを見て busy 例外応答を返すコードが自動生成されます。アプリ側は，編集の開始・終了のタイミングで `modbus_set_busy_reject_mode(TRUE/FALSE)` を呼ぶだけでよく，例外応答の組み立てや送信経路を意識する必要はありません。
+
+拒否区間・受理区間をまたぐ一連の流れなので，シーケンス図で表します。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as 実機：アプリ実装パート
+    participant Gen as 実機：自動生成パート
+    participant Master as Master
+
+    rect rgba(200, 245, 200, 0.50)
+        Note over App,Master: 通常状態（Master書き込み可）
+        App->>App: 時計編集画面へ遷移
+    end
+
+    rect rgba(255, 205, 205, 0.50)
+        Note over App,Master: 編集中（Master書き込み拒否）
+        App->>Gen: Master書き込み拒否を有効化<br/>busy reject = TRUE
+        Master->>Gen: 時計レジスタへ書き込み
+        Gen-->>Master: Exception: busy
+        App->>App: 時計編集を確定
+        App->>Gen: Master書き込み拒否を解除<br/>busy reject = FALSE
+    end
+
+    rect rgba(200, 245, 200, 0.50)
+        Note over App,Master: 通常状態（Master書き込み可）
+        Master->>Gen: 時計レジスタへ書き込み
+        Gen-->>Master: OK
+    end
+```
+
+WRITE_CHECK（2.2）との違いは，判定ロジックすら書かなくていい点です。アプリが用意するのは「今は拒否」という ON/OFF のフラグ操作だけで，判断ロジック自体が不要になります。
+
+### 2.4 書き込みに連動した処理配線を代行する
+
+例として「時刻合わせ」を考えてみます。上位システム（Master）から Modbus 経由で現在時刻を書き込めるレジスタを用意したとします。実機側では，この値を受け取っただけでは意味がなく，最終的に RTC（リアルタイムクロック）チップへ実際に書き込んで初めて時刻合わせが完了します。また，実機の画面と操作キーで時刻合わせをして確定した場合も，最終的には同じ RTC 書き込み処理を呼びたくなります。
+
+素朴に実装すると，Modbus 受信処理とローカル操作の処理それぞれに「時刻が確定したら RTC 書き込み関数を呼ぶ」という分岐を別々に書くことになり，呼び出し経路がコードのあちこちに散らばってしまいます。
+
+本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，Master からの書き込みとアプリ側からの更新の両方が，自動生成された同じ setter を経由するようになります。そこから先，実際に RTC へ書き込む処理だけをアプリ側で実装すれば完成です。
+
+```mermaid
+graph LR
+    A(["Modbus経由の書き込み<br/>(Masterが時刻をセット)"])
+    B(["実機の画面＋操作キー<br/>(時刻合わせして確定)"])
+
+    subgraph GEN["自動生成パート"]
+        S["set_current_time()<br/>(自動生成されたsetter)"]
+    end
+
+    subgraph APP["アプリ実装パート"]
+        C["RTCへ実際に書き込む処理"]
+    end
+
+    A --> S
+    B --> S
+    S --> C
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN genPart
+    class APP appPart
+```
+
+アプリ側は「RTCへの書き込み」という中身だけを実装すればよく，「いつ呼ばれるか」「どちらの経路から来たか」を気にする必要はありません。
+
+### 2.5 レジスタペアをまとめて検証する配線を代行する
+
+温度センサーの警報しきい値として，警報上限値（AL_HIGH）と警報下限値（AL_LOW）という2つのレジスタがあるとします。実機は，温度が AL_HIGH を超えるか AL_LOW を下回ったときに警報を出します。
+
+Master が Write Multiple Registers で AL_HIGH と AL_LOW を一括で書き込んだとします。「AL_LOW ≤ AL_HIGH」になっているかは，各レジスタの Min/Max チェックだけでは判定できません。AL_HIGH と AL_LOW の組み合わせを見て初めて判定できる検証です。
+
+素朴に実装すると，このレジスタ範囲への書き込みを受信処理の中で検出し，AL_HIGH と AL_LOW の両方の値を集めて，「下限 ≤ 上限」になっているかを判定するロジックを自分で書き込むことになります。
+
+本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定するだけで，両方の値をまとめてアプリ側の判定関数へ渡すコードが自動生成されます。アプリ側は，渡された2つの値が「下限 ≤ 上限」になっているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
+
+```mermaid
+graph LR
+    T(["Masterが警報上限値・下限値を<br/>一括で書き込む<br/>(例: AL_HIGH=100, AL_LOW=20)"])
+
+    subgraph GEN1["自動生成パート"]
+        Q["2レジスタの値をまとめて<br/>アプリの判定関数へ渡す"]
+    end
+
+    subgraph APP["アプリ実装パート"]
+        J["下限 ≤ 上限になっているか判定"]
+    end
+
+    subgraph GEN2["自動生成パート"]
+        R["判定結果に応じてOK/NG応答を生成・送信"]
+    end
+
+    T --> Q --> J --> R
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN1,GEN2 genPart
+    class APP appPart
+```
+
+### 2.6 複数レジスタをひとまとめにして検証する配線を代行する
+
+時刻レジスタは，年・月・日・時・分・秒がそれぞれ独立した Modbus レジスタとして存在するとします。
+
+Master が Write Multiple Registers で「2026/08/18 09:58:12」を一括で書き込んだとします。これが実在する日時として成立しているか（たとえば2月30日のような組み合わせを弾けるか）は，各レジスタの Min/Max チェックだけでは判定できません。年・月・日・時・分・秒の組み合わせを見て初めて判定できる検証です。
+
+素朴に実装すると，このレジスタ範囲への書き込みを受信処理の中で検出し，関係する6つのレジスタの値をすべて集めて，日時として成立しているかを判定するロジックを自分で書き込むことになります。
+
+本ツールでは，Excel で6つのレジスタに同じグループ名を指定するだけで，6つの値をまとめてアプリ側の検証関数へ渡すコードが自動生成されます。アプリ側は，渡された6つの値が実在する日時として成立しているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
+
+```mermaid
+graph LR
+    T(["Masterが年・月・日・時・分・秒を<br/>一括で書き込む<br/>(例: 2026/08/18 09:58:12)"])
+
+    subgraph GEN1["自動生成パート"]
+        Q["6レジスタの値をまとめて<br/>アプリの検証関数へ渡す"]
+    end
+
+    subgraph APP["アプリ実装パート"]
+        J["日時として成立しているか判定"]
+    end
+
+    subgraph GEN2["自動生成パート"]
+        R["判定結果に応じてOK/NG応答を生成・送信"]
+    end
+
+    T --> Q --> J --> R
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN1,GEN2 genPart
+    class APP appPart
+```
+
+### 2.7 書かれなかった方の穴埋めを代行する
+
+実機の RAM に AL_HIGH=100，AL_LOW=20 が保持されているとします。ここで Master が AL_LOW だけに 30 を書き込んだとします（AL_HIGH は今回の書き込み範囲に含まれません）。
+
+このとき，アプリ側の判定関数に渡したいのは，「今回書き込まれた AL_LOW の新しい値」と「今も RAM にある AL_HIGH の値」を組み合わせた，2つそろった値です。書き込まれなかった AL_HIGH をどこかから調達してこないと，「下限 ≤ 上限」の判定ができません。
+
+素朴に実装すると，今回の書き込みに AL_HIGH が含まれているかどうかを判定し，含まれていなければ RAM から読み出して埋め合わせる，という処理を自分で書くことになります。
+
+本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定しておけば，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，判定関数へ渡すコードが生成されます。アプリ側は，書き込みが片方だけでも両方でも，常に「2つそろった値」として受け取れるので，「今回どちらが書かれたか」を気にせずに判定ロジックだけを書けます。
+
+```mermaid
+graph LR
+    T(["Masterが AL_LOW だけに<br/>30を書き込む"])
+    R(["RAMに保持されている<br/>AL_HIGH"])
+
+    subgraph GEN1["自動生成パート"]
+        Q["書き込まれた値とRAMの現在値を<br/>組み合わせて2項目分の値を用意"]
+    end
+
+    subgraph APP["アプリ実装パート"]
+        J["下限 ≤ 上限になっているか判定"]
+    end
+
+    subgraph GEN2["自動生成パート"]
+        RES["判定結果に応じてOK/NG応答を生成・送信"]
+    end
+
+    T --> Q
+    R --> Q
+    Q --> J --> RES
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN1,GEN2 genPart
+    class APP appPart
+```
+
+2.5では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の2項目そろった値としてアプリ側へ渡してくれます。
+
+### 2.8 書かれなかった分の穴埋めを代行する
+
+実機の RAM に「2026/08/18 09:58:12」が保持されているとします。ここで Master が「分」レジスタだけに 42 を書き込んだとします（年・月・日・時・秒は今回の書き込み範囲に含まれません）。
+
+このとき，アプリ側の検証関数に渡したいのは，「今回書き込まれた分の新しい値」と「それ以外の，今も RAM にある値」を組み合わせた，6つそろった1つの日時です。書き込まれなかった年・月・日・時・秒をどこかから調達してこないと，検証のしようがありません。
+
+素朴に実装すると，今回の書き込み範囲にどのレジスタが含まれているかを判定し，含まれていない項目は RAM から読み出して手動で埋め合わせる，という面倒な処理を書くことになります。しかも書き込み範囲の組み合わせパターンは色々あるので，抜け漏れなく実装するのは意外と骨が折れます。
+
+本ツールでは，GROUP_VALIDATE のグループに含まれるレジスタのうち，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，検証関数へ渡すコードが生成されます。アプリ側は，書き込み範囲がどうであれ常に「6つそろった1つの日時」として値を受け取れるので，「今回どの項目が書かれたか」を気にせずに判定ロジックだけを書けます。
+
+```mermaid
+graph LR
+    T(["Masterが「分」だけに<br/>42を書き込む"])
+    R(["RAMに保持されている<br/>年・月・日・時・秒"])
+
+    subgraph GEN1["自動生成パート"]
+        Q["書き込まれた値とRAMの現在値を<br/>組み合わせて6項目分の値を用意"]
+    end
+
+    subgraph APP["アプリ実装パート"]
+        J["日時として成立しているか判定"]
+    end
+
+    subgraph GEN2["自動生成パート"]
+        RES["判定結果に応じてOK/NG応答を生成・送信"]
+    end
+
+    T --> Q
+    R --> Q
+    Q --> J --> RES
+
+    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
+    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
+    class GEN1,GEN2 genPart
+    class APP appPart
+```
+
+2.6では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の6項目そろった値としてアプリ側へ渡してくれます。
+
+### 2.9 時刻書き込みの拒否・検証・通知，三点盛り
+
+ここまで見てきた「今は触るな（2.3）」「複数レジスタの検証（2.6〜2.8）」「書き込みに連動した処理配線（2.4）」は，実際には同じ1回の書き込みの中で組み合わさって動きます。最後に，時刻合わせを例に，これらが一つの流れとしてどうつながるかを見てみます。
+
+Master が年・月・日・時・分・秒を一括で書き込んだとき，生成コードは次の順序で処理します。
+
+```mermaid
+graph TD
+    T(["Masterが年・月・日・時・分・秒を<br/>一括で書き込む"])
+    D1{"busy状態か？<br/>（2.3）"}
+    NG1(["NG(busy)応答"])
+    D2{"実在する日時として<br/>成立しているか？<br/>（2.6〜2.8）"}
+    NG2(["NG(不正な値)応答"])
+    COMMIT["RAMへ反映しOK応答を送信"]
+    RTC["RTCへ実際に書き込み<br/>（2.4）"]
+
+    T --> D1
+    D1 -- はい(忙しい) --> NG1
+    D1 -- いいえ --> D2
+    D2 -- いいえ --> NG2
+    D2 -- はい --> COMMIT
+    COMMIT --> RTC
+```
+
+> [!IMPORTANT]
+> busy判定，値の検証，RAM反映からRTC書き込みまでの呼び出し配線は，すべて自動生成されます。アプリ側が考えるのは，「値が正しいかどうか」の判定ロジックと「RTCへどう書き込むか」の実処理，その2つだけです。
+
+## 3.対象とする環境
 
 本ツールは以下の環境で動作確認を行っています。
 
@@ -50,11 +444,11 @@ Modbus のレジマップやプロトコル部分は仕様書で厳密に決ま�
 
 ---
 
-## 3.クイックスタート
+## 4.クイックスタート
 
-### 3.1. EXE版を使う
+### 4.1. EXE版を使う
 
-#### 3.1.1. ダウンロード
+#### 4.1.1. ダウンロード
 Windows 向けの実行ファイル（exe）は  
 GitHub Releases ページからダウンロードできます。
 
@@ -63,7 +457,7 @@ GitHub Releases ページからダウンロードできます。
 最新バージョンの Assets から  
 `modbus-slave-regmap-generator.exe` をダウンロードしてください。
 
-#### 3.1.2. SHA-256（検証用）
+#### 4.1.2. SHA-256（検証用）
 
 配布している実行ファイルの SHA-256 ハッシュ値は  
 Releases の Assets に含まれる `SHA256SUMS.txt` に記載しています。
@@ -76,9 +470,9 @@ certutil -hashfile modbus-slave-regmap-generator.exe SHA256
 出力されたハッシュ値が SHA256SUMS.txt に記載されている値と一致すれば、
 ファイルが改ざんされていないことを確認できます。
 
-### 3.2. ソースコードから使う
+### 4.2. ソースコードから使う
 
-#### 3.2.1. git clone + pip install
+#### 4.2.1. git clone + pip install
 次に示すコマンドを実行して，ソースコードをクローンし，pip でインストールします。
 
 ```powershell
@@ -87,7 +481,7 @@ cd modbus-slave-regmap-generator
 pip install .
 ```
 
-#### 3.2.2. 使い方
+#### 4.2.2. 使い方
 
 1. Excel でレジスタ定義ファイルを準備します。
 2. コマンドラインから以下を実行します。
@@ -97,9 +491,9 @@ msrg
 ```
 3. 起動後に Excel ファイルを選択するとExcel と同じフォルダに C/C ヘッダファイル群が出力されます。
 
-## 4.生成コードの使い方
+## 5.生成コードの使い方
 
-### 4.0 全体の流れ
+### 5.0 全体の流れ
 
 生成されたコードは、以下のステップで使用します。
 
@@ -112,7 +506,7 @@ msrg
 7. 更新通知（Master write／内部setter成立後のcallback処理）
 ---
 
-### 4.1 送信ドライバ差し込み（`modbus_sender_output` 実装）
+### 5.1 送信ドライバ差し込み（`modbus_sender_output` 実装）
 
 生成コード一式のうち、実機へフレームを吐き出す処理だけはユーザー側で書き足す必要があります。`modbus_sender_generic.c` 冒頭には次のような extern 宣言だけが置かれています。
 
@@ -140,7 +534,7 @@ void modbus_sender_output(const uint8_t *data, uint16_t len)
 
 このフックを埋めておけば、以降の送信 API（read/write リクエスト）はすべて生成コードだけで完結します。
 
-### 4.2 NVMドライバ差し込み
+### 5.2 NVMドライバ差し込み
 
 受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `NVM_Offset` にオフセットを指定したエントリについて `NVM_Request_Write_Bytes()` を呼び出します。アプリ側から `set_xxx()` で値を更新した場合も、同じく `NVM_Offset` が有効なエントリは NVM に反映されます。`NVM_Offset` は NVM 領域先頭からのバイトオフセットで、物理番地そのものではありません。生成コードは次の外部関数を呼び出すため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
 
@@ -185,7 +579,7 @@ void NVM_Request_Write_Bytes(uint16_t offset,
 ```
 
 
-### 4.3 初期化
+### 5.3 初期化
 
 起動時に行うべき初期処理は、RAM の実値を初期化することです。
 
@@ -210,11 +604,11 @@ void NVM_Request_Write_Bytes(uint16_t offset,
 
 write通知を含むその他の生成ファイルは静的領域がゼロ初期化されるため、追加の初期化は不要です。
 
-### 4.4 送信処理（Request の送信）
+### 5.4 送信処理（Request の送信）
 
 生成コード側では、各レジスタブロックごとに **read 系 (`modbus_sender_req_*`)** と **write 系 (`modbus_sender_set_*`)** の 2 本立て API が自動生成されます。`MODBUS_SLAVE_ADDR` は Excel の Config シートから取得され、すべての送信フレームに自動で組み込まれます。
 
-#### 4.4.1 Read Request（0x03）
+#### 5.4.1 Read Request（0x03）
 - 監視したいブロックに対して `modbus_sender_req_<VarName>()` を呼び出すだけで、Function Code 0x03 のフレームが生成されます。
 - 送信バッファは `modbus_sender_output()` へそのまま受け渡されるため、ユーザーは UART／RS-485 ドライバ内で実際の TX を完了させます。
 
@@ -225,7 +619,7 @@ void poll_uptime_sec(void)
 }
 ```
 
-#### 4.4.2 Write Request（0x10）
+#### 5.4.2 Write Request（0x10）
 
 - アプリ側で RAM 上の値を setter で更新したあと、`modbus_sender_set_<VarName>()` を呼び出すと Function Code 0x10（Write Multiple Registers）が組み立てられます。
 - データ型ごとに `modbus_sender_generic_u16/u32/float()` が内部で選択され、必要なバイト長や配列展開をすべて自動で行います。
@@ -241,7 +635,7 @@ void update_device_mode(uint16_t new_value)
 
 ---
 
-### 4.5 受信処理とパースと NVM 反映
+### 5.5 受信処理とパースと NVM 反映
 
 応答フレームを受信したら、reply_handler に渡すだけで完了します。
 
@@ -260,21 +654,21 @@ void update_device_mode(uint16_t new_value)
 
 ---
 
-### 4.6 レジスタアクセス（getter / setter）
+### 5.6 レジスタアクセス（getter / setter）
 
-#### 4.6.1 値の読み出し（getter）
+#### 5.6.1 値の読み出し（getter）
 
     uint16_t mode = get_device_mode();
     float process_value = get_process_value();
 
-#### 4.6.2 値の書き換え（setter）
+#### 5.6.2 値の書き換え（setter）
 
     set_device_mode(2);
     set_process_value(36.5f);
 
 setter は min/max チェックを自動で行います。範囲外の値をセットしようとした場合は何も変更されません。値が現在値と異なる場合は RAM を更新し、`NVM_Offset` が有効なエントリでは `NVM_Request_Write_Bytes()` で NVM にも反映します。同じ値をセットした場合は成功扱いで戻りますが、RAM/NVM への書き込みは行いません。
 
-#### 4.6.3 文字列レジスタのアクセス
+#### 5.6.3 文字列レジスタのアクセス
 
 `Type` に `string` または `CHAR` を指定したレジスタでは、数値用の min/max 取得関数は生成されず、文字列専用のアクセサが生成されます。
 
@@ -304,13 +698,13 @@ set_device_name("SENSOR-A");
 
 内部 RAM は `ArrayLen` byte の固定長フィールドであり、最大長まで文字が格納されている場合はフィールド内に NUL がありません。そのため、内部 RAM や Modbus から読み出した固定長データを `strlen()`、`strcmp()`、`printf("%s", ...)` などの C 標準文字列関数へ直接渡してはいけません。標準文字列関数を使用する場合は、必ず `get_<VarName>_copy()` で `ArrayLen + 1` byte 以上のバッファへコピーし、NUL 終端された C 文字列に変換してから渡してください。
 
-#### 4.6.4 下限値・上限値の取得
+#### 5.6.4 下限値・上限値の取得
 
     uint16_t min_mode = get_device_mode_min();
     uint16_t max_mode = get_device_mode_max();
 ---
 
-### 4.7 更新通知
+### 5.7 更新通知
 
 RegisterTableの`UPDATE_NOTIFY`を`TRUE`にすると、正常に受理したModbus
 Master writeと、正常終了した生成setterの両方から同期的に呼び出すユーザー
@@ -410,13 +804,13 @@ void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
 場合は通知しません。通知対象は正常なMaster writeと生成setterだけです。
 
 
-## 5.詳細仕様
+## 6.詳細仕様
 
-### 5.1.入力 Excel のフォーマット概要
+### 6.1.入力 Excel のフォーマット概要
 
 本ツールは、次のような構造のレジスタ定義書（Excel）を前提としています。
 
-#### 5.1.1.RegisterTable シート
+#### 6.1.1.RegisterTable シート
 
 | 列名 | 例 | 説明 |
 |------|------------|-------------------------------------------|
@@ -494,7 +888,7 @@ void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 
-#### 5.1.2LengthDefs シート（任意）
+#### 6.1.2LengthDefs シート（任意）
 
 | 列名 | 説明 |
 |------|-------------------------------------------|
@@ -506,7 +900,7 @@ void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
 
 ※プロジェクトに応じて追加カラムは自由に拡張できます。  
 
-#### 5.1.3.Config シート
+#### 6.1.3.Config シート
 
 標準フォーマットでは C5セルに `NVM_SIZE`、D5セルに NVM 領域のサイズ（10進数）を指定します。`NVM_SIZE` は `NVM_Offset` の範囲チェックと、生成コード上の未使用値 `NVM_OFFSET_UNUSED` の定義に使われます。指定可能な範囲は `1` から `65535` です。
 
@@ -516,7 +910,7 @@ void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
 
 ---
 
-### 5.2.書込みガード
+### 6.2.書込みガード
 
 生成コードはModbus書込みを次の順序で処理します。
 
@@ -615,11 +1009,11 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 
 ---
 
-### 5.3.生成されるファイル一覧
+### 6.3.生成されるファイル一覧
 
 本ツール実行後、選択した Excel と同じフォルダに以下の C/C ヘッダファイル群が出力されます。
 
-#### 5.3.1.レジスタ定義・アクセサ
+#### 6.3.1.レジスタ定義・アクセサ
 | ファイル | 役割 |
 |---------|--------------------------------------------|
 | `modbus_reg_map_slave.c/h` | レジスタのメタ情報テーブル（型、アドレス、Min/Max/Default、RAM 参照など） |
@@ -627,7 +1021,7 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 | `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
 | `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、typed snapshot |
 
-#### 5.3.2.更新通知
+#### 6.3.2.更新通知
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
@@ -637,7 +1031,7 @@ WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以
 出力先に存在する場合は、再生成時に削除されます。`EDGE`と`WRITE_NOTIFY`列、
 および旧consume APIとの互換性はありません。
 
-#### 5.3.3.受信処理
+#### 6.3.3.受信処理
 
 | ファイル | 役割 |
 |---------|--------------------------------------------|
