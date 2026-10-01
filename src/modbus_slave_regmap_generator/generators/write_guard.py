@@ -172,7 +172,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             "            return MB_FALSE;",
             "    }",
             "}",
-            "",
         ]
     )
 

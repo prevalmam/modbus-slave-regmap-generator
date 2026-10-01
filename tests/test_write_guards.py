@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from modbus_slave_regmap_generator.generators import parser, write_guard
 from modbus_slave_regmap_generator.workbook_loader import load_workbook_data
+from modbus_slave_regmap_generator.writer import write_generated_files
 
 
 HEADERS = [
@@ -104,6 +105,28 @@ class WriteGuardGenerationTests(unittest.TestCase):
         self.assertIn("return MODBUS_WRITE_DEVICE_FAILURE;", parser_source)
         self.assertIn("return (int)user_result;", parser_source)
         self.assertNotIn("MODBUS_EXC_SLAVE_DEVICE_BUSY", parser_source)
+
+    def test_generated_files_have_one_final_lf_without_blank_line(self):
+        for busy_reject in ("FALSE", "TRUE"):
+            with self.subTest(busy_reject=busy_reject):
+                workbook = self._load(
+                    [
+                        [1, "mode", "uint16_t", 1, "RW", 0, 1, 0, "-",
+                         "FALSE", busy_reject, "FALSE", "-"],
+                    ]
+                )
+                generated_files = write_guard.generate(workbook)
+                with tempfile.TemporaryDirectory() as output_dir:
+                    write_generated_files(output_dir, generated_files)
+                    for generated_file in generated_files:
+                        with self.subTest(filename=generated_file.filename):
+                            output = (Path(output_dir) / generated_file.filename).read_bytes()
+                            self.assertTrue(output.endswith(b"\n"))
+                            self.assertFalse(output.endswith(b"\n\n"))
+                            self.assertNotIn(b"\r", output)
+                            self.assertFalse(output.startswith(b"\xef\xbb\xbf"))
+                            for line in output.splitlines():
+                                self.assertEqual(line, line.rstrip(b" \t"))
 
     def test_rejects_non_boolean_busy_reject(self):
         with self.assertRaisesRegex(ValueError, "BUSY_REJECT must be TRUE or FALSE"):
