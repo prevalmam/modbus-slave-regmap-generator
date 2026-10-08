@@ -56,7 +56,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         }} access_mode_t;
 
         typedef struct {{
-            const char * name;
             uint16_t     modbus_addr;
             uint16_t     nvm_offset;
             uint16_t     size;
@@ -121,7 +120,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
     c_text += "\nconst reg_table_entry_t g_reg_table_slave[] = {\n"
     for entry in entries:
         c_text += "    {\n"
-        c_text += f"        \"{entry['name']}\",\n"
         c_text += f"        {entry['modbus_addr']},\n"
         c_text += f"        {entry['nvm_offset']},\n"
         c_text += f"        {entry['size']},\n"
