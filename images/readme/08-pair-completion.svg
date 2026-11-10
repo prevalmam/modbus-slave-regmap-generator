@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" role="img" aria-labelledby="title desc">
+<title id="title">下限だけを書いても、上限とセットで判定</title>
+<desc id="desc">MasterがAL_LOW=30だけを書込み、AL_HIGH=100をRAMから補う。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#738597" stroke-width="1.7"/></marker></defs>
+<rect width="1000" height="100%" fill="#ffffff"/>
+<g font-family="Yu Gothic UI, Meiryo, sans-serif" fill="#172d43">
+<text x="26" y="32" font-size="17" fill="#526477" font-weight="400" text-anchor="start">2.7 グループ検証と値の補完</text>
+<text x="26" y="72" font-size="29" fill="#172d43" font-weight="700" text-anchor="start">下限だけを書いても、上限とセットで判定</text>
+<text x="26" y="106" font-size="19" fill="#526477" font-weight="400" text-anchor="start">同じグループ名をExcelで指定。値を揃えて渡す配線は自動生成。</text>
+<path d="M26 126 H974" fill="none" stroke="#dbe3eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="26" y="150" width="435" height="122" rx="12" fill="#eaf2ff" stroke="#5782b6" stroke-width="1.3"/>
+<text x="44" y="179" font-size="16" fill="#234f82" font-weight="700" text-anchor="start">入力 1：今回書き込まれた新しい値</text>
+<text x="44" y="214" font-size="22" fill="#172d43" font-weight="400" text-anchor="start">AL_LOW = 30</text>
+<rect x="521" y="150" width="453" height="122" rx="12" fill="#f3f6fa" stroke="#c9d4df" stroke-width="1.3"/>
+<text x="539" y="179" font-size="16" fill="#172d43" font-weight="700" text-anchor="start">入力 2：書かれなかった項目はRAMから</text>
+<text x="539" y="214" font-size="20" fill="#172d43" font-weight="400" text-anchor="start">AL_HIGH = 100</text>
+<path d="M244 278 V291 H370 V309" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M748 278 V291 H630 V309" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="26" y="315" width="948" height="140" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
+<text x="44" y="344" font-size="19" fill="#994210" font-weight="700" text-anchor="start">自動生成：新しい値 ＋ RAMの現在値 → そろった値をアプリへ</text>
+<rect x="209" y="361" width="270" height="77" rx="7" fill="#f3f6fa" stroke="#c9d4df" stroke-width="1"/>
+<text x="223" y="384" font-size="16" fill="#172d43" font-weight="400" text-anchor="start">AL_HIGH</text>
+<text x="344.0" y="421" font-size="28" fill="#172d43" font-weight="700" text-anchor="middle">100</text>
+<text x="467" y="383" font-size="14" fill="#172d43" font-weight="400" text-anchor="end">RAM</text>
+<rect x="523" y="361" width="270" height="77" rx="7" fill="#eaf2ff" stroke="#5782b6" stroke-width="1"/>
+<text x="537" y="384" font-size="16" fill="#234f82" font-weight="400" text-anchor="start">AL_LOW</text>
+<text x="658.0" y="421" font-size="28" fill="#234f82" font-weight="700" text-anchor="middle">30</text>
+<text x="781" y="383" font-size="14" fill="#234f82" font-weight="400" text-anchor="end">新</text>
+<path d="M500 461 L500 480" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="26" y="486" width="604" height="108" rx="12" fill="#effaf3" stroke="#429269" stroke-width="1.3"/>
+<text x="44" y="515" font-size="16" fill="#22613e" font-weight="700" text-anchor="start">アプリ実装：組合せの検証</text>
+<text x="44" y="550" font-size="25" fill="#172d43" font-weight="400" text-anchor="start">AL_LOW ≤ AL_HIGH</text>
+<rect x="712" y="486" width="262" height="108" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
+<text x="730" y="515" font-size="16" fill="#994210" font-weight="700" text-anchor="start">自動生成：判定結果</text>
+<text x="730" y="550" font-size="24" fill="#172d43" font-weight="400" text-anchor="start">OK / NG応答</text>
+<path d="M636 544 L706 544" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<text x="26" y="626" font-size="19" fill="#526477" font-weight="400" text-anchor="start">青い値だけが今回の更新。RAMから補った値も含め、常にグループ全体を検証する。</text>
+</g>
+</svg>

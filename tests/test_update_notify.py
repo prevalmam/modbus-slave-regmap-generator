@@ -151,12 +151,20 @@ class UpdateNotifyGenerationTests(unittest.TestCase):
             function_start = source.index(f"int set_{name}(")
             function_end = source.index("\n}", function_start)
             function = source[function_start:function_end]
-            self.assertIn("if (value != current)" if name != "device_name" else "if (memcmp(ram, temp, sizeof(temp)) != 0)", function)
+            if name == "command":
+                self.assertIn(
+                    "result = reg_slave_set_uint16(MODBUS_IDX_command, value);",
+                    function,
+                )
+                self.assertIn("if (result != 0)", function)
+            else:
+                self.assertIn("if (value != current)" if name != "device_name" else "if (memcmp(ram, temp, sizeof(temp)) != 0)", function)
             self.assertIn(
                 f"modbus_reg_update_notify_internal_set(MODBUS_IDX_{name});",
                 function,
             )
-            self.assertTrue(function.rstrip().endswith("return 1;"))
+            expected_return = "return result;" if name == "command" else "return 1;"
+            self.assertTrue(function.rstrip().endswith(expected_return))
         plain_start = source.index("int set_plain(")
         plain_end = source.index("\n}", plain_start)
         self.assertNotIn("update_notify", source[plain_start:plain_end])

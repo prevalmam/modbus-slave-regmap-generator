@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 from typing import List
@@ -6,7 +7,7 @@ from tkinter import filedialog, messagebox
 
 if __package__ in {None, ""}:  # pragma: no cover - support direct execution / PyInstaller
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    sys.path.append(os.path.dirname(current_dir))
+    sys.path.insert(0, os.path.dirname(current_dir))
 
 from modbus_slave_regmap_generator.generators import GeneratedFile
 from modbus_slave_regmap_generator.generators import (
@@ -24,7 +25,15 @@ from modbus_slave_regmap_generator.writer import (
 )
 
 
-def main() -> None:
+def _parse_args(argv=None) -> argparse.Namespace:
+    argument_parser = argparse.ArgumentParser(
+        description="Generate Modbus slave register maps and access functions."
+    )
+    return argument_parser.parse_args(argv)
+
+
+def main(argv=None) -> None:
+    _parse_args(argv)
     root = tk.Tk()
     root.withdraw()
     file_path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])

@@ -2,9 +2,16 @@ from __future__ import annotations
 
 from typing import List, Set
 
-from ..utils import get_base_type, get_read_func, get_write_func
+from ..utils import get_base_type, get_read_func
 from ..workbook_loader import WorkbookData
 from . import GeneratedFile
+
+
+_SCALAR_SETTERS = {
+    "REG_TYPE_UINT16": "reg_slave_set_uint16",
+    "REG_TYPE_UINT32": "reg_slave_set_uint32",
+    "REG_TYPE_FLOAT": "reg_slave_set_float",
+}
 
 
 def _collect_used_types(entries) -> Set[str]:
@@ -13,6 +20,70 @@ def _collect_used_types(entries) -> Set[str]:
 
 def _is_string_entry(entry) -> bool:
     return entry["type"] == "REG_TYPE_STRING"
+
+
+def _generate_shared_scalar_core(entry_type: str) -> List[str]:
+    base_type = get_base_type(entry_type)
+    helper = _SCALAR_SETTERS[entry_type]
+    return [
+        f"static int {helper}(uint16_t table_index, {base_type} value)",
+        "{",
+        "    const reg_table_entry_t *entry;",
+        f"    {base_type} min_value;",
+        f"    {base_type} max_value;",
+        f"    {base_type} current;",
+        "",
+        "    entry = &g_reg_table_slave[table_index];",
+        f"    min_value = *((const {base_type} *)entry->min_value);",
+        f"    max_value = *((const {base_type} *)entry->max_value);",
+        f"    current = *((const {base_type} *)entry->ram_ptr);",
+        "",
+        "    if ((value < min_value) || (value > max_value))",
+        "    {",
+        "        return 0;",
+        "    }",
+        "",
+        "    if (value != current)",
+        "    {",
+        f"        *(({base_type} *)entry->ram_ptr) = value;",
+        "        write_nvm_if_used(entry->nvm_offset,",
+        "                          entry->ram_ptr,",
+        "                          (uint16_t)sizeof(value));",
+        "    }",
+        "",
+        "    return 1;",
+        "}",
+        "",
+    ]
+
+
+def _generate_shared_scalar_setter(entry) -> List[str]:
+    entry_type = entry["type"]
+    if entry_type not in _SCALAR_SETTERS or entry["length"] != 1:
+        raise ValueError("shared setter requires a numeric scalar entry")
+
+    name = entry["name"]
+    base_type = get_base_type(entry_type)
+    helper = _SCALAR_SETTERS[entry_type]
+    idx_macro = f"MODBUS_IDX_{name}"
+    lines = [f"int set_{name}({base_type} value)", "{"]
+    if entry["update_notify"]:
+        lines.extend(
+            [
+                "    int result;",
+                "",
+                f"    result = {helper}({idx_macro}, value);",
+                "    if (result != 0)",
+                "    {",
+                f"        modbus_reg_update_notify_internal_set({idx_macro});",
+                "    }",
+                "    return result;",
+            ]
+        )
+    else:
+        lines.append(f"    return {helper}({idx_macro}, value);")
+    lines.append("}")
+    return lines
 
 
 def generate(workbook: WorkbookData) -> List[GeneratedFile]:
@@ -149,24 +220,26 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         access_c_lines.extend(
             [
                 "static uint16_t read_uint16(const void *ptr) { return *((const uint16_t *)ptr); }",
-                "static void write_uint16(void *ptr, uint16_t val) { *((uint16_t *)ptr) = val; }",
             ]
         )
     if "uint32_t" in used_types:
         access_c_lines.extend(
             [
                 "static uint32_t read_uint32(const void *ptr) { return *((const uint32_t *)ptr); }",
-                "static void write_uint32(void *ptr, uint32_t val) { *((uint32_t *)ptr) = val; }",
             ]
         )
     if "float" in used_types:
         access_c_lines.extend(
             [
                 "static float    read_float (const void *ptr) { return *((const float    *)ptr); }",
-                "static void write_float (void *ptr, float    val) { *((float    *)ptr) = val; }",
-                "",
             ]
         )
+        access_c_lines.append("")
+
+    scalar_types = {entry["type"] for entry in entries if entry["length"] == 1}
+    for entry_type in _SCALAR_SETTERS:
+        if entry_type in scalar_types:
+            access_c_lines.extend(_generate_shared_scalar_core(entry_type))
 
     access_c_lines.append("/* Access function implementations */")
 
@@ -231,7 +304,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
         base_type = get_base_type(entry["type"])
         read_func = get_read_func(entry["type"])
-        write_func = get_write_func(entry["type"])
         is_array = entry["length"] > 1
 
         idx_macro = f"MODBUS_IDX_{name}"
@@ -252,59 +324,9 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("}")
 
         if is_array:
-            access_c_lines.append(f"int set_{name}(uint16_t index, {base_type} value)")
-            access_c_lines.append("{")
-            access_c_lines.append(f"    const {base_type} min = {read_func}({entry_ref}.min_value);")
-            access_c_lines.append(f"    const {base_type} max = {read_func}({entry_ref}.max_value);")
-            access_c_lines.append(f"    {base_type} * const ram = ({base_type} *)({entry_ref}.ram_ptr);")
-            access_c_lines.append(f"    {base_type} current;")
-            access_c_lines.append("    uint16_t nvm_offset;")
-            access_c_lines.append(f"    if (index >= {entry['length']}U) {{ return 0; }}")
+            _append_array_setter(access_c_lines, entry, base_type, read_func)
         else:
-            access_c_lines.append(f"int set_{name}({base_type} value)")
-            access_c_lines.append("{")
-            access_c_lines.append(f"    const {base_type} min = {read_func}({entry_ref}.min_value);")
-            access_c_lines.append(f"    const {base_type} max = {read_func}({entry_ref}.max_value);")
-            access_c_lines.append(f"    const {base_type} current = {read_func}({entry_ref}.ram_ptr);")
-
-        access_c_lines.append("    if ((value < min) || (value > max))")
-        access_c_lines.append("    {")
-        access_c_lines.append("        return 0;")
-        access_c_lines.append("    }")
-        access_c_lines.append("")
-
-        if is_array:
-            access_c_lines.append("    current = ram[index];")
-
-        access_c_lines.append("    if (value != current)")
-        access_c_lines.append("    {")
-        if is_array:
-            access_c_lines.append("        ram[index] = value;")
-            access_c_lines.append(f"        if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
-            access_c_lines.append("        {")
-            access_c_lines.append(
-                f"            nvm_offset = (uint16_t)({entry_ref}.nvm_offset + "
-                f"(uint16_t)(index * sizeof({base_type})));"
-            )
-            access_c_lines.append(
-                "            write_nvm_if_used(nvm_offset, &ram[index], "
-                "(uint16_t)sizeof(value));"
-            )
-            access_c_lines.append("        }")
-        else:
-            access_c_lines.append(f"        {write_func}({entry_ref}.ram_ptr, value);")
-            access_c_lines.append(
-                f"        write_nvm_if_used({entry_ref}.nvm_offset, {entry_ref}.ram_ptr, "
-                "(uint16_t)sizeof(value));"
-            )
-        access_c_lines.append("    }")
-
-        if entry["update_notify"]:
-            access_c_lines.append(
-                f"    modbus_reg_update_notify_internal_set({idx_macro});"
-            )
-        access_c_lines.append("    return 1;")
-        access_c_lines.append("}")
+            access_c_lines.extend(_generate_shared_scalar_setter(entry))
 
         access_c_lines.append(f"{base_type} get_{name}_min(void)")
         access_c_lines.append("{")
@@ -332,3 +354,51 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         GeneratedFile("modbus_reg_access_slave.h", "\n".join(access_lines)),
         GeneratedFile("modbus_reg_access_slave.c", "\n".join(access_c_lines)),
     ]
+
+
+def _append_array_setter(
+    access_c_lines: List[str], entry, base_type: str, read_func: str
+) -> None:
+    name = entry["name"]
+    idx_macro = f"MODBUS_IDX_{name}"
+    entry_ref = f"g_reg_table_slave[{idx_macro}]"
+
+    access_c_lines.append(f"int set_{name}(uint16_t index, {base_type} value)")
+    access_c_lines.append("{")
+    access_c_lines.append(f"    const {base_type} min = {read_func}({entry_ref}.min_value);")
+    access_c_lines.append(f"    const {base_type} max = {read_func}({entry_ref}.max_value);")
+    access_c_lines.append(f"    {base_type} * const ram = ({base_type} *)({entry_ref}.ram_ptr);")
+    access_c_lines.append(f"    {base_type} current;")
+    access_c_lines.append("    uint16_t nvm_offset;")
+    access_c_lines.append(f"    if (index >= {entry['length']}U) {{ return 0; }}")
+
+    access_c_lines.append("    if ((value < min) || (value > max))")
+    access_c_lines.append("    {")
+    access_c_lines.append("        return 0;")
+    access_c_lines.append("    }")
+    access_c_lines.append("")
+
+    access_c_lines.append("    current = ram[index];")
+
+    access_c_lines.append("    if (value != current)")
+    access_c_lines.append("    {")
+    access_c_lines.append("        ram[index] = value;")
+    access_c_lines.append(f"        if ({entry_ref}.nvm_offset != NVM_OFFSET_UNUSED)")
+    access_c_lines.append("        {")
+    access_c_lines.append(
+        f"            nvm_offset = (uint16_t)({entry_ref}.nvm_offset + "
+        f"(uint16_t)(index * sizeof({base_type})));"
+    )
+    access_c_lines.append(
+        "            write_nvm_if_used(nvm_offset, &ram[index], "
+        "(uint16_t)sizeof(value));"
+    )
+    access_c_lines.append("        }")
+    access_c_lines.append("    }")
+
+    if entry["update_notify"]:
+        access_c_lines.append(
+            f"    modbus_reg_update_notify_internal_set({idx_macro});"
+        )
+    access_c_lines.append("    return 1;")
+    access_c_lines.append("}")

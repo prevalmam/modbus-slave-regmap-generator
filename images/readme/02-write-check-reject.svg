@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="612" viewBox="0 0 1000 612" role="img" aria-labelledby="title desc">
+<title id="title">測定中の「3：校正」要求は拒否</title>
+<desc id="desc">Masterが測定中に3：校正を要求。生成コードはmodbus_user_write_check_opmodeへ現在値と新しい値を渡す。アプリの許可経路は測定と停止の往復、および停止と校正の往復。今回の要求は拒否され、測定状態を維持しNG例外応答を返す。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="#738597" stroke-width="1.7"/></marker></defs>
+<rect width="1000" height="100%" fill="#ffffff"/>
+<g font-family="Yu Gothic UI, Meiryo, sans-serif" fill="#172d43">
+<text x="26" y="32" font-size="17" fill="#526477" font-weight="400" text-anchor="start">2.2 状態に応じた書込み判定</text>
+<text x="26" y="72" font-size="29" fill="#172d43" font-weight="700" text-anchor="start">測定中の「3：校正」要求は拒否</text>
+<text x="26" y="106" font-size="19" fill="#526477" font-weight="400" text-anchor="start">呼出しと応答は自動生成。状態遷移の可否はアプリが判断する。</text>
+<path d="M26 126 H974" fill="none" stroke="#dbe3eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="26" y="150" width="265" height="111" rx="12" fill="#f3f6fa" stroke="#c9d4df" stroke-width="1.3"/>
+<text x="44" y="179" font-size="16" fill="#172d43" font-weight="700" text-anchor="start">入力：Master</text>
+<text x="44" y="214" font-size="22" fill="#172d43" font-weight="400" text-anchor="start">3：校正を書き込む</text>
+<rect x="333" y="150" width="641" height="111" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
+<text x="351" y="179" font-size="16" fill="#994210" font-weight="700" text-anchor="start">自動生成：現在値と新しい値を渡す</text>
+<text x="351" y="214" font-size="22" fill="#172d43" font-weight="400" text-anchor="start">modbus_user_write_check_opmode()</text>
+<path d="M297 207 L327 207" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M652 267 V286 H346 V306" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="26" y="312" width="641" height="221" rx="12" fill="#effaf3" stroke="#429269" stroke-width="1.3"/>
+<text x="44" y="342" font-size="18" fill="#22613e" font-weight="700" text-anchor="start">アプリ実装：状態遷移の判定</text>
+<rect x="54" y="408" width="132" height="58" rx="29" fill="#eaf2ff" stroke="#5782b6" stroke-width="1.3"/>
+<text x="120" y="445" font-size="23" fill="#172d43" font-weight="700" text-anchor="middle">測定</text>
+<rect x="280" y="408" width="132" height="58" rx="29" fill="#ffffff" stroke="#92baa4" stroke-width="1.3"/>
+<text x="346" y="445" font-size="23" fill="#172d43" font-weight="700" text-anchor="middle">停止</text>
+<rect x="506" y="408" width="132" height="58" rx="29" fill="#ffffff" stroke="#92baa4" stroke-width="1.3"/>
+<text x="572" y="445" font-size="23" fill="#172d43" font-weight="700" text-anchor="middle">校正</text>
+<text x="120" y="393" font-size="17" fill="#234f82" font-weight="400" text-anchor="middle">現在の状態</text>
+<path d="M192 428 L274 428" fill="none" stroke="#429269" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M274 449 L192 449" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M418 428 L500 428" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M500 449 L418 449" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<path d="M120 402 V370 H572 V402" fill="none" stroke="#d16b66" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 6" marker-end="url(#arrow)"/>
+<rect x="258" y="354" width="180" height="32" rx="6" fill="#fff1f0" stroke="#fff1f0" stroke-width="0"/>
+<text x="348" y="377" font-size="18" fill="#9c302c" font-weight="400" text-anchor="middle">直接の遷移は不可</text>
+<text x="44" y="508" font-size="20" fill="#22613e" font-weight="400" text-anchor="start">許可経路：測定 ⇄ 停止 ⇄ 校正</text>
+<path d="M673 433 L716 433" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
+<rect x="725" y="360" width="249" height="161" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
+<text x="743" y="389" font-size="16" fill="#994210" font-weight="700" text-anchor="start">自動生成：応答</text>
+<text x="743" y="424" font-size="20" fill="#172d43" font-weight="400" text-anchor="start">NG：拒否</text>
+<text x="743" y="454" font-size="20" fill="#172d43" font-weight="400" text-anchor="start">測定を継続する</text>
+<text x="26" y="578" font-size="19" fill="#526477" font-weight="400" text-anchor="start">同じ判定関数への配線で、現在の状態と要求値に応じて結果が変わる。</text>
+</g>
+</svg>

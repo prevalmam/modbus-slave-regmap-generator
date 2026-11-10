@@ -51,32 +51,7 @@ Modbus スレーブとしての基本的な受信処理を考えてみます。M
 
 本ツールは，まさにこの「機械化しやすく，かつ人力でやりたくない」核の部分──パース・検証・RAM反映・NVM 呼び出し経路の確保・リプライ生成──を丸ごと代行します。ユーザーが実装するのは，実機依存の HAL 層（データの受信と送信）だけです。
 
-```mermaid
-graph LR
-    T(["Masterが書き込みフレームを送信"])
-
-    subgraph HAL_RX["アプリ実装パート（HAL受信）"]
-        RX["UART/RS-485で受信データを収集"]
-    end
-
-    subgraph GEN["自動生成パート"]
-        P["パース・CRC検証・RAM反映<br/>（必要ならNVM書込み要求）"]
-        R["OK/NGリプライフレーム生成"]
-        P --> R
-    end
-
-    subgraph HAL_TX["アプリ実装パート（HAL送信）"]
-        TX["UART/RS-485で実際に送信"]
-    end
-
-    T --> RX --> P
-    R --> TX
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN genPart
-    class HAL_RX,HAL_TX appPart
-```
+![受信・検証・応答生成・送信の責任分担](images/readme/01-receive-and-reply.svg)
 
 ### 2.2 「通していいか」をアプリに聞く配線を代行する
 
@@ -100,74 +75,11 @@ graph LR
 
 **拒否されるケース（測定中に校正要求を書き込む）**
 
-```mermaid
-graph LR
-    W(["Masterが3:校正要求を書き込む"])
-
-    subgraph GEN1["自動生成パート"]
-        Q["modbus_user_write_check_opmode()<br/>へ現在値・新しい値を渡す"]
-    end
-
-    subgraph APP["アプリ実装パート（状態遷移図）"]
-        direction LR
-        S_STOP(("停止"))
-        S_MEAS(("測定"))
-        S_CAL(("校正"))
-        S_STOP --> S_MEAS
-        S_MEAS --> S_STOP
-        S_STOP --> S_CAL
-        S_CAL --> S_STOP
-    end
-
-    subgraph GEN2["自動生成パート"]
-        RNG["NG応答を生成・送信"]
-    end
-
-    W --> Q --> APP --> RNG
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN1,GEN2 genPart
-    class APP appPart
-
-    style S_MEAS fill:#ffe27a,stroke:#c9922b,stroke-width:4px,color:#5c3d00
-```
+![測定中の校正要求を拒否する流れ](images/readme/02-write-check-reject.svg)
 
 **受理されるケース（測定中に停止を書き込む）**
 
-```mermaid
-graph LR
-    W2(["Masterが1:停止を書き込む"])
-
-    subgraph GEN3["自動生成パート"]
-        Q2["modbus_user_write_check_opmode()<br/>へ現在値・新しい値を渡す"]
-    end
-
-    subgraph APP2["アプリ実装パート（状態遷移図）"]
-        direction LR
-        S2_STOP(("停止"))
-        S2_MEAS(("測定"))
-        S2_CAL(("校正"))
-        S2_STOP --> S2_MEAS
-        S2_MEAS --> S2_STOP
-        S2_STOP --> S2_CAL
-        S2_CAL --> S2_STOP
-    end
-
-    subgraph GEN4["自動生成パート"]
-        ROK["OK応答を生成・送信"]
-    end
-
-    W2 --> Q2 --> APP2 --> ROK
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN3,GEN4 genPart
-    class APP2 appPart
-
-    style S2_MEAS fill:#ffe27a,stroke:#c9922b,stroke-width:4px,color:#5c3d00
-    linkStyle 1 stroke:#c9922b,stroke-width:4px
-```
+![測定中の停止要求を受理する流れ](images/readme/03-write-check-accept.svg)
 
 アプリ側が実装するのは，状態遷移図で表される「その遷移を許可するかどうか」の判断だけです。呼び出しの配線と応答の生成は，どちらのケースでも自動生成コードが担います。
 
@@ -190,33 +102,7 @@ graph LR
 
 拒否区間・受理区間をまたぐ一連の流れなので，シーケンス図で表します。
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant App as 実機：アプリ実装パート
-    participant Gen as 実機：自動生成パート
-    participant Master as Master
-
-    rect rgba(200, 245, 200, 0.50)
-        Note over App,Master: 通常状態（Master書き込み可）
-        App->>App: 時計編集画面へ遷移
-    end
-
-    rect rgba(255, 205, 205, 0.50)
-        Note over App,Master: 編集中（Master書き込み拒否）
-        App->>Gen: Master書き込み拒否を有効化<br/>busy reject = TRUE
-        Master->>Gen: 時計レジスタへ書き込み
-        Gen-->>Master: Exception: busy
-        App->>App: 時計編集を確定
-        App->>Gen: Master書き込み拒否を解除<br/>busy reject = FALSE
-    end
-
-    rect rgba(200, 245, 200, 0.50)
-        Note over App,Master: 通常状態（Master書き込み可）
-        Master->>Gen: 時計レジスタへ書き込み
-        Gen-->>Master: OK
-    end
-```
+![時刻編集中の書込み拒否と解除の時系列](images/readme/04-busy-window.svg)
 
 WRITE_CHECK（2.2）との違いは，判定ロジックすら書かなくていい点です。アプリが用意するのは「今は拒否」という ON/OFF のフラグ操作だけで，判断ロジック自体が不要になります。
 
@@ -228,28 +114,7 @@ WRITE_CHECK（2.2）との違いは，判定ロジックすら書かなくてい
 
 本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，Master からの書き込みと，アプリ側からの `set_current_time()` 呼び出しの両方から，同じユーザーコールバックが呼ばれるようになります。呼び出し元がどちらだったかはコールバックに渡される `source` 引数で判別できるので，必要なら経路ごとに分岐することもできます。そこから先，実際に RTC へ書き込む処理だけをアプリ側で実装すれば完成です。
 
-```mermaid
-graph LR
-    A(["Modbus経由の書き込み<br/>(Masterが時刻をセット)"])
-    B(["実機の画面＋操作キー<br/>(時刻合わせして確定)"])
-
-    subgraph GEN["自動生成パート"]
-        CB["同じユーザーコールバックを呼ぶ"]
-    end
-
-    subgraph APP["アプリ実装パート"]
-        C["RTCへ実際に書き込む処理"]
-    end
-
-    A --> CB
-    B --> CB
-    CB --> C
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN genPart
-    class APP appPart
-```
+![Masterと内部setterから同じRTC処理への合流](images/readme/05-update-callback.svg)
 
 アプリ側は「RTCへの書き込み」という中身だけを実装すればよく，「いつ呼ばれるか」を自分で配線する必要はありません。経路を区別したい場合だけ，渡された `source` を見れば済みます。
 
@@ -263,29 +128,7 @@ Master が Write Multiple Registers で AL_HIGH と AL_LOW を一括で書き込
 
 本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定するだけで，両方の値をまとめてアプリ側の判定関数へ渡すコードが自動生成されます。アプリ側は，渡された2つの値が「下限 ≤ 上限」になっているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
 
-```mermaid
-graph LR
-    T(["Masterが警報上限値・下限値を<br/>一括で書き込む<br/>(例: AL_HIGH=100, AL_LOW=20)"])
-
-    subgraph GEN1["自動生成パート"]
-        Q["2レジスタの値をまとめて<br/>アプリの判定関数へ渡す"]
-    end
-
-    subgraph APP["アプリ実装パート"]
-        J["下限 ≤ 上限になっているか判定"]
-    end
-
-    subgraph GEN2["自動生成パート"]
-        R["判定結果に応じてOK/NG応答を生成・送信"]
-    end
-
-    T --> Q --> J --> R
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN1,GEN2 genPart
-    class APP appPart
-```
+![警報上限値と下限値を組み合わせた検証](images/readme/06-pair-validation.svg)
 
 ### 2.6 複数レジスタをひとまとめにして検証する配線を代行する
 
@@ -297,29 +140,7 @@ Master が Write Multiple Registers で「2026/08/18 09:58:12」を一括で書�
 
 本ツールでは，Excel で6つのレジスタに同じグループ名を指定するだけで，6つの値をまとめてアプリ側の検証関数へ渡すコードが自動生成されます。アプリ側は，渡された6つの値が実在する日時として成立しているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
 
-```mermaid
-graph LR
-    T(["Masterが年・月・日・時・分・秒を<br/>一括で書き込む<br/>(例: 2026/08/18 09:58:12)"])
-
-    subgraph GEN1["自動生成パート"]
-        Q["6レジスタの値をまとめて<br/>アプリの検証関数へ渡す"]
-    end
-
-    subgraph APP["アプリ実装パート"]
-        J["日時として成立しているか判定"]
-    end
-
-    subgraph GEN2["自動生成パート"]
-        R["判定結果に応じてOK/NG応答を生成・送信"]
-    end
-
-    T --> Q --> J --> R
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN1,GEN2 genPart
-    class APP appPart
-```
+![年・月・日・時・分・秒を揃えた日時検証](images/readme/07-datetime-validation.svg)
 
 ### 2.7 書かれなかった方の穴埋めを代行する
 
@@ -331,32 +152,7 @@ graph LR
 
 本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定しておけば，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，判定関数へ渡すコードが生成されます。アプリ側は，書き込みが片方だけでも両方でも，常に「2つそろった値」として受け取れるので，「今回どちらが書かれたか」を気にせずに判定ロジックだけを書けます。
 
-```mermaid
-graph LR
-    T(["Masterが AL_LOW だけに<br/>30を書き込む"])
-    R(["RAMに保持されている<br/>AL_HIGH"])
-
-    subgraph GEN1["自動生成パート"]
-        Q["書き込まれた値とRAMの現在値を<br/>組み合わせて2項目分の値を用意"]
-    end
-
-    subgraph APP["アプリ実装パート"]
-        J["下限 ≤ 上限になっているか判定"]
-    end
-
-    subgraph GEN2["自動生成パート"]
-        RES["判定結果に応じてOK/NG応答を生成・送信"]
-    end
-
-    T --> Q
-    R --> Q
-    Q --> J --> RES
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN1,GEN2 genPart
-    class APP appPart
-```
+![下限の新しい値とRAM上の上限値を組み合わせた検証](images/readme/08-pair-completion.svg)
 
 2.5では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の2項目そろった値としてアプリ側へ渡してくれます。
 
@@ -370,32 +166,7 @@ graph LR
 
 本ツールでは，Excel でこの6つのレジスタに同じグループ名を指定しておけば，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，検証関数へ渡すコードが生成されます。アプリ側は，書き込み範囲がどうであれ常に「6つそろった1つの日時」として値を受け取れるので，「今回どの項目が書かれたか」を気にせずに判定ロジックだけを書けます。
 
-```mermaid
-graph LR
-    T(["Masterが「分」だけに<br/>42を書き込む"])
-    R(["RAMに保持されている<br/>年・月・日・時・秒"])
-
-    subgraph GEN1["自動生成パート"]
-        Q["書き込まれた値とRAMの現在値を<br/>組み合わせて6項目分の値を用意"]
-    end
-
-    subgraph APP["アプリ実装パート"]
-        J["日時として成立しているか判定"]
-    end
-
-    subgraph GEN2["自動生成パート"]
-        RES["判定結果に応じてOK/NG応答を生成・送信"]
-    end
-
-    T --> Q
-    R --> Q
-    Q --> J --> RES
-
-    classDef genPart fill:#FFF7ED,stroke:#F97316,stroke-width:4px,color:#9A3412
-    classDef appPart fill:#dcfce7,stroke:#16a34a,color:#14532d
-    class GEN1,GEN2 genPart
-    class APP appPart
-```
+![分の新しい値とRAM上の他5項目を組み合わせた検証](images/readme/09-datetime-completion.svg)
 
 2.6では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の6項目そろった値としてアプリ側へ渡してくれます。
 
@@ -405,23 +176,7 @@ graph LR
 
 Master が年・月・日・時・分・秒を一括で書き込んだとき，生成コードは次の順序で処理します。
 
-```mermaid
-graph TD
-    T(["Masterが年・月・日・時・分・秒を<br/>一括で書き込む"])
-    D1{"busy状態か？<br/>（2.3）"}
-    NG1(["NG(busy)応答"])
-    D2{"実在する日時として<br/>成立しているか？<br/>（2.6〜2.8）"}
-    NG2(["NG(不正な値)応答"])
-    COMMIT["RAMへ反映しOK応答を送信"]
-    RTC["RTCへ実際に書き込み<br/>（2.4）"]
-
-    T --> D1
-    D1 -- はい(忙しい) --> NG1
-    D1 -- いいえ --> D2
-    D2 -- いいえ --> NG2
-    D2 -- はい --> COMMIT
-    COMMIT --> RTC
-```
+![時刻書込みの拒否・検証・RAM反映・RTC更新の全体フロー](images/readme/10-write-end-to-end.svg)
 
 > [!IMPORTANT]
 > busy判定，値の検証，RAM反映からRTC書き込みまでの呼び出し配線は，すべて自動生成されます。アプリ側が考えるのは，「値が正しいかどうか」の判定ロジックと「RTCへどう書き込むか」の実処理，その2つだけです。
@@ -490,6 +245,34 @@ pip install .
 msrg
 ```
 3. 起動後に Excel ファイルを選択するとExcel と同じフォルダに C/C ヘッダファイル群が出力されます。
+
+### 4.2.3. 数値setterの標準生成方式
+
+数値スカラーsetterの共通化を標準動作としています。
+EXEをダブルクリックしてExcelを選択すると、共通化されたCコードを生成します。
+ソース版の `msrg` も同じ動作で、生成方式を指定する引数は不要です。
+
+インストール済みパッケージを更新せず、チェックアウト内のソースを直接使う場合は、
+リポジトリーのルートで次を実行できます。
+
+```powershell
+.\.venv\Scripts\python.exe -B .\src\modbus_slave_regmap_generator\main.py
+```
+
+`uint16_t`、`uint32_t`、`float` のスカラーsetterを、アクセスC内の型別
+`static` 関数へ委譲します。公開する名前付き・型付きAPIと既存の定義テーブルを維持し、
+通知は対象setterに残します。同値setでも受理時の通知を行い、RAM更新とNVM要求は
+変更時だけ行います。getter、文字列、数値配列、masked setterの処理と
+外部Modbus書込みの権限判定は従来の動作を維持します。追加の静的RAMやheapは使用しません。
+
+Pythonからも通常の呼出しで共通化されたsetterを生成します。
+
+```python
+reg_access.generate(workbook)
+```
+
+この生成器を利用する各プロジェクトで、数値スカラーsetterの共通化が適用されます。
+Flash削減量と追加の呼出し負荷は、利用先のコンパイラー・最適化設定で確認してください。
 
 ## 5.生成コードの使い方
 
