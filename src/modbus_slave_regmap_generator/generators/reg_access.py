@@ -87,6 +87,17 @@ def _generate_shared_scalar_setter(entry) -> List[str]:
 
 
 def generate(workbook: WorkbookData) -> List[GeneratedFile]:
+    value_getters = {
+        f"get_{entry['name']}" for entry in workbook.entries
+        if entry["type"] not in ("REG_TYPE_RESERVED", "REG_TYPE_STRING")
+    }
+    declared_symbols = {entry["name"] for entry in workbook.entries} | set(workbook.length_defs)
+    for entry in workbook.entries:
+        if entry["type"] in ("REG_TYPE_RESERVED", "REG_TYPE_STRING"):
+            continue
+        default_getter = f"get_{entry['name']}_default"
+        if default_getter in value_getters or default_getter in declared_symbols:
+            raise ValueError(f"Default accessor C identifier conflicts: {default_getter}")
     entries = workbook.entries
     used_types = _collect_used_types(entries)
     has_string = any(_is_string_entry(entry) for entry in entries)
@@ -136,6 +147,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
 
         access_lines.append(f"{base_type} get_{base_name}_min(void);")
         access_lines.append(f"{base_type} get_{base_name}_max(void);")
+        default_argument = "uint16_t index" if is_array else "void"
+        access_lines.append(f"{base_type} get_{base_name}_default({default_argument});")
         access_lines.append("")
 
     access_lines.append("#endif")
@@ -337,6 +350,20 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
         access_c_lines.append("{")
         access_c_lines.append(f"    return {read_func}({entry_ref}.max_value);")
         access_c_lines.append("}")
+
+        default_argument = "uint16_t index" if is_array else "void"
+        access_c_lines.append(f"{base_type} get_{name}_default({default_argument})")
+        access_c_lines.append("{")
+        if is_array:
+            access_c_lines.append(
+                f"    if (index >= {entry['length']}U) {{ return ({base_type})0; }}"
+            )
+            access_c_lines.append(
+                f"    return ((const {base_type} *)({entry_ref}.default_value))[index];"
+            )
+        else:
+            access_c_lines.append(f"    return {read_func}({entry_ref}.default_value);")
+        access_c_lines.append("}")
         access_c_lines.append("")
 
         if base_type in ("uint16_t", "uint32_t") and not is_array:
@@ -351,8 +378,8 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             access_c_lines.append("")
 
     return [
-        GeneratedFile("modbus_reg_access_slave.h", "\n".join(access_lines)),
-        GeneratedFile("modbus_reg_access_slave.c", "\n".join(access_c_lines)),
+        GeneratedFile("modbus_reg_access_slave.h", "\n".join(access_lines) + "\n"),
+        GeneratedFile("modbus_reg_access_slave.c", "\n".join(access_c_lines).rstrip("\n") + "\n"),
     ]
 
 

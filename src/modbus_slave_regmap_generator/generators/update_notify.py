@@ -124,6 +124,6 @@ def generate(workbook: WorkbookData) -> List[GeneratedFile]:
             "modbus_reg_update_notify_slave.c", "\n".join(source_lines)
         ),
         GeneratedFile(
-            "modbus_reg_update_notify_slave.h", "\n".join(header_lines)
+            "modbus_reg_update_notify_slave.h", "\n".join(header_lines) + "\n"
         ),
     ]

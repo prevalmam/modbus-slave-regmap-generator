@@ -126,7 +126,7 @@ class SharedScalarGenerationTests(unittest.TestCase):
             "return read_uint16(g_reg_table_slave[MODBUS_IDX_command].ram_ptr);",
             _function(self.source, "get_command"),
         )
-        for suffix, field in (("min", "min_value"), ("max", "max_value")):
+        for suffix, field in (("min", "min_value"), ("max", "max_value"), ("default", "default_value")):
             self.assertIn(
                 f"return read_uint32(g_reg_table_slave[MODBUS_IDX_counter].{field});",
                 _function(self.source, f"get_counter_{suffix}"),
@@ -146,6 +146,28 @@ class SharedScalarGenerationTests(unittest.TestCase):
                 self.assertIn(f"(uint16_t)(index * sizeof({base_type}))", function)
                 self.assertIn("write_nvm_if_used(nvm_offset, &ram[index], (uint16_t)sizeof(value));", function)
         self.assertNotIn("set_reserved_20", self.source)
+
+    def test_default_array_getters_preserve_element_selection_and_bounds(self):
+        header = self.shared["modbus_reg_access_slave.h"]
+        for name, base_type, count in (("values16", "uint16_t", 3), ("values32", "uint32_t", 2), ("values_float", "float", 2)):
+            with self.subTest(name=name):
+                self.assertIn(f"{base_type} get_{name}_default(uint16_t index);", header)
+                function = _function(self.source, f"get_{name}_default")
+                self.assertIn(f"if (index >= {count}U) {{ return ({base_type})0; }}", function)
+                self.assertIn(
+                    f"return ((const {base_type} *)(g_reg_table_slave[MODBUS_IDX_{name}].default_value))[index];",
+                    function,
+                )
+                self.assertNotIn("write_nvm", function)
+
+    def test_default_getter_name_conflicts_are_rejected(self):
+        for conflicting_name in ("level_default", "get_level_default"):
+            with self.subTest(name=conflicting_name):
+                with self.assertRaisesRegex(ValueError, "get_level_default"):
+                    _files(_workbook([
+                        _entry("level", "REG_TYPE_FLOAT", "float"),
+                        _entry(conflicting_name, "REG_TYPE_UINT16", "uint16_t"),
+                    ]))
 
     def test_only_array_string_or_reserved_entries_add_no_scalar_cores(self):
         entries = [entry for entry in self.workbook.entries if entry["length"] > 1 or entry["type"] == "REG_TYPE_RESERVED"]
