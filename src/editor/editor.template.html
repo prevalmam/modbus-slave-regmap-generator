@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="ja" data-modbus-regmap-editor="1">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modbus レジスタマップエディター</title>
+<style>
+:root {
+  color-scheme: light; --navy: #10243a; --ink: #172b3e; --muted: #54697c;
+  --paper: #f2f6f9; --line: #dbe4ec; --accent: #0d6559; --accent-hover: #094e45;
+  --soft: #e5f3ef; --white: #fff; --error: #9b2f24;
+  font: 14px/1.55 "Segoe UI", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html { overflow: hidden; }
+body {
+  display: flex; flex-direction: column; height: 100vh; height: 100dvh; overflow: hidden;
+  margin: 0; background: var(--paper); color: var(--ink);
+}
+button, input, select, textarea { font: inherit; }
+button, select { cursor: pointer; }
+button { min-height: 36px; }
+button, input, select, textarea { border: 1px solid #b9c9d7; border-radius: 7px; background: white; color: var(--ink); }
+button { padding: .47rem .78rem; font-weight: 650; white-space: nowrap; }
+button:hover { background: #eef4f8; border-color: #8197a9; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+  outline: 2px solid #16857a; outline-offset: 2px;
+}
+button:disabled { cursor: default; opacity: .55; }
+button.primary { color: white; background: var(--accent); border-color: var(--accent); }
+button.primary:hover { background: var(--accent-hover); }
+button.plain { background: transparent; border-color: transparent; color: var(--muted); }
+button.danger { color: var(--error); }
+button.small { min-height: 30px; padding: .22rem .55rem; }
+input, select, textarea { min-width: 0; padding: .36rem .48rem; }
+input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent); margin: 0; }
+input:disabled { background: #f2f5f7; color: #657a8a; border-color: #e1e8ee; }
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: #bd564a; background: #fff6f4; }
+code, .mono, td input, td select { font-family: "Cascadia Mono", Consolas, monospace; font-variant-numeric: tabular-nums; }
+[hidden] { display: none !important; }
+.wrap { max-width: 1520px; margin: auto; padding-inline: clamp(16px, 3vw, 46px); }
+.top { flex: none; background: var(--navy); color: #e9f5f4; }
+.top .wrap { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.brand { display: flex; align-items: center; gap: 11px; }
+.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; background: #194b53; border-radius: 8px; color: #c0f5e5; }
+.brand-mark svg { width: 20px; height: 20px; }
+.brand strong { font-size: 1.07rem; letter-spacing: .015em; }
+.top .local { color: #b9cbd9; font-size: .87rem; }
+.top button { background: #203a52; border-color: #567189; color: #f3f8fc; }
+.top button:hover { background: #2a4a65; }
+.top .html-actions { justify-content: flex-end; }
+.top #save-html { background: var(--accent); border-color: #57a79b; position: relative; overflow: hidden; }
+.top #save-html:hover { background: var(--accent-hover); }
+#save-html:not(:disabled) { box-shadow: 0 0 0 3px #c0f5e545; }
+#save-html:not(:disabled)::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(110deg, transparent 34%, #ffffff66 49%, transparent 63%);
+  transform: translateX(-72%); animation: save-shine 1.4s linear infinite;
+}
+@keyframes save-shine {
+  0% { transform: translateX(-72%); }
+  100% { transform: translateX(72%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #save-html:not(:disabled)::after { animation: none; }
+}
+#html-save-state { color: #c0f5e5; font-size: .83rem; white-space: nowrap; }
+#html-save-state[data-dirty="true"] { color: #ffe0ab; }
+#html-save-message { margin: 0 0 8px; color: var(--accent); overflow-wrap: anywhere; }
+#html-save-message:empty, #html-unsaved-message:empty { display: none; }
+#html-save-message.error, #html-unsaved-message.error { color: var(--error); }
+#html-folder-path { display: block; overflow-wrap: anywhere; user-select: all; }
+main.wrap {
+  display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%;
+  margin-block: 0; padding-block: 29px 22px;
+}
+.intro, .config, .notice { flex: none; }
+.intro { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 14px 24px; margin-bottom: 19px; }
+.intro h1 { font-size: clamp(1.8rem, 3vw, 2.55rem); line-height: 1.2; letter-spacing: -.045em; margin: 5px 0 7px; }
+.intro p { margin: 0; color: var(--muted); }
+.eyebrow { display: flex; gap: 8px; align-items: center; color: var(--accent); font-size: .78rem; font-weight: 750; letter-spacing: .12em; }
+.eyebrow span { letter-spacing: .04em; border-radius: 4px; padding: 1px 6px; background: #dceae8; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.editor-tabs { display: flex; flex: none; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.editor-tabs button { border-radius: 7px 7px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
+.editor-tabs button[aria-selected="true"] { background: white; border-color: var(--line); border-bottom-color: var(--accent); color: var(--accent); }
+.editor-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.config { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; background: white; border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px; margin-bottom: 16px; }
+.config label { display: flex; align-items: center; gap: 7px; font-size: .91rem; font-weight: 650; }
+.config input { width: 81px; }
+.config .origin { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin-left: auto; color: var(--muted); }
+.badge { display: inline-block; font-size: .83rem; font-weight: 700; border-radius: 5px; padding: 2px 8px; background: var(--soft); color: #15594e; overflow-wrap: anywhere; }
+.card {
+  display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0;
+  border: 1px solid var(--line); border-radius: 11px; overflow: hidden;
+  background: white; box-shadow: 0 2px 5px #132d4210;
+}
+.toolbar, .table-foot { flex: none; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: 9px 20px; padding: 12px 15px; }
+.toolbar h2 { font-size: 1.2rem; margin: 0; }
+.toolbar h2 span { margin-left: 7px; font-weight: 500; font-size: .84rem; color: var(--muted); }
+.toolbar input { width: clamp(132px, 23vw, 250px); }
+.toolbar input, .toolbar select { min-height: 36px; }
+.table-wrap {
+  flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain;
+  border-block: 1px solid var(--line);
+}
+.table-wrap:focus-visible { outline: 2px solid #16857a; outline-offset: -2px; }
+table { border-spacing: 0; width: 100%; text-align: left; }
+.registers { min-width: 850px; table-layout: fixed; }
+.enum-cell { padding-inline: 7px; background: #f0f8f5; overflow-wrap: anywhere; }
+.enum-cell .badge { padding-inline: 5px; }
+th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
+td { padding: 5px 5px; border-bottom: 1px solid #eaf0f5; }
+tbody tr:nth-child(even) { background: #f8fafc; }
+tbody tr:hover { background: #eef6f6; }
+tbody tr:last-child td { border-bottom: 0; }
+td input, td select { width: 100%; min-height: 31px; padding: .24rem .37rem; border-color: #d3dfe8; border-radius: 5px; }
+td:last-child, th:last-child { text-align: center; }
+td.empty { padding: 28px 12px; text-align: center; color: var(--muted); }
+.table-foot { padding: 8px 15px; display: flex; justify-content: space-between; flex-wrap: wrap; align-items: center; gap: 6px 12px; color: var(--muted); }
+.table-foot p { margin: 0; }
+#validation-button[data-state="bad"] { color: var(--error); border-color: #e6bdb5; background: #fff6f4; }
+#validation-button[data-state="ok"] { color: var(--accent); background: var(--soft); border-color: #bbded5; }
+.notice { margin: 11px 1px 0; color: var(--muted); font-size: .9rem; }
+#message { color: var(--accent); font-weight: 650; }
+#message.error { color: var(--error); }
+dialog { width: min(580px, calc(100% - 24px)); border: 1px solid #b9c9d7; border-radius: 13px; padding: 0; color: var(--ink); box-shadow: 0 14px 54px #0c243d44; }
+dialog::backdrop { background: #142a4080; }
+.dialog-title { padding: 12px 17px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--line); }
+.dialog-title h2 { margin: 0; font-size: 1.18rem; overflow-wrap: anywhere; }
+.dialog-body { padding: 14px 17px 17px; }
+.dialog-body p { margin: 0 0 12px; color: var(--muted); }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; }
+.field-grid label { display: grid; gap: 3px; font-weight: 650; }
+.field-grid .wide { grid-column: 1 / -1; }
+textarea { resize: vertical; }
+.detail-section { border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px 12px; }
+.detail-section + .detail-section { margin-top: 11px; }
+.detail-section.operational { background: #f0f8f5; border-color: #bbded5; }
+.detail-section.reference { background: #f4f7fa; }
+.detail-section h3 { font-size: 1rem; margin: 0 0 3px; }
+.detail-section p { margin: 0 0 8px; font-size: .86rem; }
+.detail-section .field-grid { gap: 7px 10px; }
+.detail-section select:disabled { background: #f2f5f7; color: #657a8a; border-color: #d3dfe8; }
+.dialog-foot { border-top: 1px solid var(--line); padding: 10px 17px; justify-content: flex-end; }
+#code-dialog { width: min(940px, calc(100% - 24px)); }
+#code { max-height: 50vh; overflow: auto; padding: 13px; background: #13283b; color: #e4f2f8; border-radius: 7px; tab-size: 4; }
+#code-selection { max-width: 100%; }
+#issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
+#issue-list li { margin-bottom: 5px; }
+#length-body td:last-child { width: 75px; }
+#length-dialog table { margin-bottom: 8px; }
+.enum-workspace { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); min-height: 0; gap: 12px; }
+.enum-workspace .card { overflow: auto; overscroll-behavior: contain; }
+.enum-types, .enum-form { padding: 14px 16px; }
+.enum-types h3, .enum-form h3 { margin: 0 0 8px; font-size: 1rem; }
+.enum-types .actions { justify-content: space-between; }
+#enum-list { list-style: none; padding: 0; margin: 9px 0 0; }
+#enum-list li + li { margin-top: 5px; }
+#enum-list button { width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+#enum-list button[aria-pressed="true"] { color: var(--accent); background: var(--soft); border-color: #bbded5; }
+#enum-list code { display: block; color: var(--muted); font-size: .82rem; }
+.enum-form .field-grid { max-width: 720px; margin-bottom: 14px; }
+.enum-form .table-wrap { flex: none; max-height: min(38vh, 400px); }
+.enum-members { min-width: 340px; }
+.enum-members td:last-child { width: 66px; }
+.enum-form .actions { margin-top: 10px; }
+.enum-form .enum-notes { color: var(--muted); margin: 4px 0 8px; font-size: .86rem; }
+#enum-status { color: var(--accent); }
+#enum-status.error { color: var(--error); }
+#enum-title { margin: 0; }
+.enum-intro { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px; }
+.enum-intro p { flex-basis: 100%; color: var(--muted); margin: 0; }
+@media (max-width: 650px) {
+  main.wrap { padding-block: 16px 12px; }
+  .top .local { display: none; }
+  .top .wrap { flex-wrap: wrap; gap: 5px 12px; padding-block: 5px; }
+  .top .html-actions { gap: 5px; }
+  .top .html-actions button { min-height: 30px; padding: .2rem .4rem; }
+  .config { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; padding-inline: 8px; }
+  .config label { font-size: .8rem; gap: 4px; }
+  .config input { width: 43px; padding-inline: 4px; }
+  .config .origin { min-width: 0; width: 100%; margin-left: 0; gap: 4px; flex-wrap: nowrap; }
+  .origin > span:first-child { display: none; }
+  .origin .badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .origin button { font-size: .76rem; padding-inline: 3px; }
+  .toolbar { padding-inline: 8px; }
+  .toolbar .actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; gap: 4px; }
+  .toolbar input { width: 100%; }
+  .toolbar select, .toolbar button { font-size: .85rem; padding-inline: 5px; }
+  .enum-workspace { display: flex; flex-direction: column; overflow: auto; }
+  .enum-workspace .card { flex: none; }
+  .enum-types, .enum-form { padding: 8px; }
+}
+@media (max-height: 650px) {
+  .top .wrap { min-height: 48px; }
+  main.wrap { padding-block: 10px; }
+  .intro { margin-bottom: 8px; gap: 6px 16px; }
+  .intro h1 { font-size: 1.65rem; margin: 2px 0; }
+  .intro p, .eyebrow { display: none; }
+  .config { padding: 7px 10px; gap: 5px 12px; margin-bottom: 8px; }
+  .toolbar { padding-block: 7px; gap: 5px 12px; }
+  .table-foot { padding: 4px 10px; }
+  .notice { margin-top: 6px; }
+  .editor-tabs { margin-bottom: 6px; }
+}
+@media (max-height: 470px), (max-width: 650px) and (max-height: 520px) {
+  .notice, .input-hint { display: none; }
+}
+@media (max-width: 400px) and (max-height: 450px) {
+  .top .wrap { min-height: 44px; }
+  main.wrap { padding-block: 6px; }
+  .intro, .config { margin-bottom: 5px; }
+  .intro > div:first-child, .toolbar h2 {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .intro button, .toolbar input, .toolbar select, .toolbar button { min-height: 30px; }
+  .toolbar, .table-foot { padding-block: 4px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 9v11"/></svg></span>
+      <div><strong>Modbus Slave</strong> <span class="local">レジスタ定義ツール</span></div>
+    </div>
+    <div class="actions html-actions">
+      <span id="html-save-state"></span>
+      <button type="button" id="open-json">JSONを開く</button>
+      <button type="button" id="restore-html">保存済みを読み直す</button>
+      <button type="button" id="save-html" aria-keyshortcuts="Control+S" title="Ctrl+S">HTMLに上書き保存</button>
+    </div>
+    <input id="file" type="file" accept=".json,application/json" hidden>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="intro" aria-labelledby="title">
+    <div>
+      <div class="eyebrow">REGMAP EDITOR <span>UI試作</span></div>
+      <h1 id="title">レジスタマップ</h1>
+      <p>レジスタ定義を表で編集し、JSONに保存できます。</p>
+    </div>
+    <div class="actions" id="register-actions">
+      <button type="button" id="save-json">JSONを保存</button>
+      <button type="button" class="primary" id="open-code">C/H 一括生成</button>
+    </div>
+  </section>
+
+  <p id="html-save-message" role="status"></p>
+  <div class="editor-tabs" role="tablist" aria-label="編集対象">
+    <button type="button" role="tab" id="register-tab" aria-controls="register-panel" aria-selected="true">レジスタ</button>
+    <button type="button" role="tab" id="enum-tab" aria-controls="enum-panel" aria-selected="false" tabindex="-1">列挙型</button>
+  </div>
+
+  <div class="editor-panel" id="register-panel" role="tabpanel" aria-labelledby="register-tab">
+  <section class="config" aria-label="基本設定">
+    <label>スレーブアドレス <input id="slave-address" inputmode="numeric" class="mono"></label>
+    <label>NVMサイズ <input id="nvm-size" inputmode="numeric" class="mono"> B</label>
+    <button type="button" id="open-lengths">配列長定義 <span id="length-count"></span></button>
+    <div class="origin"><span>編集中</span><span id="source" class="badge"></span><button type="button" class="plain small" id="reset-sample">サンプルを開く</button></div>
+  </section>
+
+  <section class="card" aria-labelledby="register-title">
+    <div class="toolbar">
+      <h2 id="register-title">レジスタ <span id="row-count"></span></h2>
+      <div class="actions">
+        <input type="search" id="search" placeholder="アドレス・変数名で検索" aria-label="アドレス・変数名で検索">
+        <select id="type-filter" aria-label="型で絞り込む">
+          <option value="">すべての型</option><option>uint16_t</option><option>uint32_t</option><option>float</option>
+          <option>string</option><option value="reserved">予約領域</option>
+        </select>
+        <button type="button" id="add-row">＋ 行を追加</button>
+      </div>
+    </div>
+    <div class="table-wrap" id="table-wrap" role="region" aria-labelledby="register-title" tabindex="0">
+      <table class="registers">
+        <colgroup><col style="width:8%"><col style="width:21%"><col style="width:10%"><col style="width:9%">
+          <col style="width:7%"><col style="width:8%"><col style="width:8%"><col style="width:12%"><col style="width:10%"><col style="width:7%"></colgroup>
+        <thead><tr><th scope="col">アドレス</th><th scope="col">変数名</th><th scope="col">型</th><th scope="col">配列長</th>
+          <th scope="col">権限</th><th scope="col">下限</th><th scope="col">上限</th><th scope="col">初期値</th>
+          <th scope="col">NVMオフセット</th><th scope="col">詳細</th></tr></thead>
+        <tbody id="register-body"></tbody>
+      </table>
+    </div>
+    <div class="table-foot">
+      <button type="button" class="small" id="validation-button"></button>
+      <p id="message" role="status" aria-live="polite"></p>
+      <p class="input-hint">NVM未使用は <code>-</code>。文字列は引用符で囲み、空文字列は <code>""</code> と入力します。</p>
+    </div>
+  </section>
+  <p class="notice">C/H出力ではレジスタ定義、アクセサ、書き込みガード、更新通知、パーサーを生成します。</p>
+  </div>
+
+  <section class="editor-panel" id="enum-panel" role="tabpanel" aria-labelledby="enum-tab" hidden>
+    <div class="enum-intro">
+      <h2 id="enum-title">列挙型の登録</h2>
+      <p>型と選択肢を登録し、レジスタの詳細から使う型と初期値を選びます。</p>
+    </div>
+    <div class="enum-workspace">
+      <section class="card enum-types" aria-labelledby="enum-list-title">
+        <div class="actions"><h3 id="enum-list-title">列挙型一覧</h3><button type="button" class="small" id="enum-add">＋ 型を追加</button></div>
+        <ul id="enum-list"></ul>
+      </section>
+      <form class="card enum-form" id="enum-form" aria-labelledby="enum-form-title">
+        <h3 id="enum-form-title">列挙型の定義</h3>
+        <div class="field-grid">
+          <label>型ID <input id="enum-id" class="mono" required pattern="[a-z][a-z0-9_]*" placeholder="modbus_parity"></label>
+          <label>表示名 <input id="enum-label" required placeholder="Modbusパリティ"></label>
+        </div>
+        <h3 id="enum-members-title">選択肢</h3>
+        <p class="enum-notes">Modbus値は通信で使う整数です。選択肢の並び順からは決まりません。</p>
+        <div class="table-wrap" role="region" aria-labelledby="enum-members-title" tabindex="0">
+          <table class="enum-members">
+            <thead><tr><th scope="col">選択肢ID</th><th scope="col">Modbus値</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead>
+            <tbody id="enum-members"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button type="button" class="small" id="enum-add-member">＋ 選択肢を追加</button>
+          <button type="submit" class="primary small">登録</button>
+          <span id="enum-status" role="status"></span>
+        </div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<dialog id="detail-dialog" aria-labelledby="detail-title">
+  <div class="dialog-title"><h2 id="detail-title">レジスタの詳細</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body" id="detail-body">
+    <section class="detail-section operational" aria-labelledby="operational-title">
+      <h3 id="operational-title">生成・動作に反映する設定</h3>
+      <p>更新時の通知や、書き込み時の検証に使う設定です。</p>
+      <div class="field-grid">
+        <label>更新通知
+          <select data-detail="updateNotify"><option value="false">無効</option><option value="true">有効</option><option value="-" disabled>対象外</option></select>
+        </label>
+        <label>BUSY拒否
+          <select data-detail="busyReject"><option value="false">無効</option><option value="true">有効</option><option value="-" disabled>対象外</option></select>
+        </label>
+        <label>書き込み判定
+          <select data-detail="writeCheck"><option value="false">無効</option><option value="true">有効</option><option value="-" disabled>対象外</option></select>
+        </label>
+        <label>グループ検証名 <input data-detail="groupValidate" placeholder="未入力"></label>
+      </div>
+      <p style="margin: 7px 0 0">グループ検証を使わない場合は <code>-</code> を入力します。</p>
+    </section>
+    <section class="detail-section" id="enum-detail" aria-labelledby="enum-detail-title" hidden>
+      <h3 id="enum-detail-title">値の指定</h3>
+      <p>列挙型を指定した行では、型付きのgetter／setterを生成します。</p>
+      <div class="field-grid">
+        <label class="wide">指定方式
+          <select id="enum-detail-kind"><option value="range">数値範囲</option><option value="enum">列挙型</option></select>
+        </label>
+        <label data-enum-detail hidden>列挙型 <select id="enum-detail-type"></select></label>
+        <label data-enum-detail hidden>初期値 <select id="enum-detail-default"></select></label>
+      </div>
+    </section>
+    <section class="detail-section reference" aria-labelledby="reference-title">
+      <h3 id="reference-title">説明・記録用の付加情報</h3>
+      <p>JSONに記録する説明項目です。記載事項がない項目は <code>-</code> を入力します。</p>
+      <div class="field-grid">
+        <label>単位 <input data-detail="unit"></label>
+        <label>機能仕様番号 <input data-detail="spec"></label>
+        <label class="wide">概要 <input data-detail="summary"></label>
+        <label class="wide">詳細 <textarea rows="2" data-detail="description"></textarea></label>
+        <label class="wide">備考 <textarea rows="2" data-detail="notes"></textarea></label>
+      </div>
+    </section>
+  </div>
+  <div class="dialog-foot actions">
+    <button type="button" class="danger" id="delete-row">この行を削除</button>
+    <button type="button" class="primary" data-close>表に戻る</button>
+  </div>
+</dialog>
+
+<dialog id="length-dialog" aria-labelledby="length-dialog-title">
+  <div class="dialog-title"><h2 id="length-dialog-title">配列長定義</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>名前を定義すると、レジスタ表の「配列長」欄に数値の代わりにその名前を入力できます。</p>
+    <table><thead><tr><th scope="col">定義名</th><th scope="col">長さ</th><th scope="col">操作</th></tr></thead><tbody id="length-body"></tbody></table>
+    <button type="button" id="add-length">＋ 定義を追加</button>
+  </div>
+</dialog>
+
+<dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
+  <div class="dialog-title"><h2 id="issue-dialog-title">入力の検証</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body"><ul id="issue-list"></ul></div>
+</dialog>
+
+<dialog id="code-dialog" aria-labelledby="code-dialog-title">
+  <div class="dialog-title"><h2 id="code-dialog-title">C/H 一括生成</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>生成内容はファイルごとに確認でき、C/H一式をZIPで保存できます。</p>
+    <label>生成ファイル <select id="code-selection" class="mono"></select></label>
+    <pre id="code" tabindex="0"></pre>
+  </div>
+  <div class="dialog-foot actions">
+    <button type="button" class="primary" id="save-zip">C/H一式をZIPで保存</button>
+  </div>
+</dialog>
+
+<dialog id="html-unsaved-dialog" aria-labelledby="html-unsaved-title">
+  <div class="dialog-title"><h2 id="html-unsaved-title">未保存の編集があります</h2></div>
+  <div class="dialog-body">
+    <p>次の操作に進む前に、今回の編集をどうしますか？</p>
+    <p id="html-unsaved-message" role="status"></p>
+  </div>
+  <div class="dialog-foot actions">
+    <button type="button" class="primary" id="html-save-and-continue">保存して続ける</button>
+    <button type="button" class="danger" id="html-discard-and-continue">破棄して続ける</button>
+    <button type="button" id="html-unsaved-cancel" autofocus>キャンセル</button>
+  </div>
+</dialog>
+
+<dialog id="html-save-location" aria-labelledby="html-save-location-title">
+  <div class="dialog-title"><h2 id="html-save-location-title"></h2></div>
+  <div class="dialog-body">
+    <p id="html-copy-fallback" hidden>下のパスを選択してコピーできます。</p>
+    <p>保存ダイアログで <kbd>Alt+D</kbd> → <kbd>Ctrl+V</kbd> → <kbd>Enter</kbd> を押すと、元のフォルダーへ移動できます。</p>
+    <code id="html-folder-path"></code>
+  </div>
+  <div class="dialog-foot actions">
+    <button type="button" class="primary" id="html-open-picker" autofocus>保存ダイアログを開く</button>
+    <button type="button" id="html-cancel-picker">キャンセル</button>
+  </div>
+</dialog>
+
+<script id="html-project-data" type="application/json">null</script>
+<script>
+/* @editor-script */
+</script>
+</body>
+</html>

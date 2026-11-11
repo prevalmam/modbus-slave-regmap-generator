@@ -1,0 +1,11 @@
+{
+  "name": "modbus-slave-regmap-editor",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && node tools/build-editor.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "none",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "strict": true,
+    "noEmitOnError": true,
+    "outFile": "build/editor/editor.js"
+  },
+  "files": [
+    "src/editor/model.ts",
+    "src/editor/generator-templates.ts",
+    "src/editor/generator.ts",
+    "src/editor/enum-editor.ts",
+    "src/editor/html-save.ts",
+    "src/editor/editor.ts"
+  ]
+}

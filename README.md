@@ -9,6 +9,36 @@
 
 といった，Modbus 通信まわりの定型コード一式を自動生成するツールです。
 
+## ブラウザ用レジスタエディター（試作）
+
+配布用の [modbus-regmap-editor.html](modbus-regmap-editor.html) をブラウザで開くと、レジスタの編集、JSON保存、C/H一括生成が使えます。生成内容はファイルごとに確認し、C/H一式をZIPで保存できます。
+
+ChromeまたはEdgeでは「HTMLに上書き保存」か Ctrl+S で、編集中のデータをHTMLに保存できます。初回は保存先を選び、同じタブでの次回以降は同じファイルに上書きします。保存したHTMLを開くと入力途中から再開できます。JSONとC/Hの出力時には入力を検証します。
+
+列挙型は「列挙型」タブで登録し、配列長1の `uint16_t` レジスタの詳細から指定します。JSON v3では、`enums` に型と選択肢、各レジスタの `valueDomain` に型の参照と初期値を保存します。旧版JSONと `RegisterTable.json` の数値は数値範囲として読み込みます。
+
+列挙型を登録すると `modbus_reg_enums_slave.c/.h` も同じZIPに入ります。列挙型を指定したレジスタのgetterは出力引数、setterは値引数で列挙型を受け取り、どちらも成功時に `1`、失敗時に `0` を返します。Modbus通信とNVMへの書き込みには、登録した `uint16_t` の値を使います。
+
+列挙型で `WRITE_CHECK` を有効にすると、Modbus書き込み時に、現在値と要求値を列挙型に変換して製品側のコールバックを呼びます。要求値が未定義なら `0x03`、RAMの現在値が未定義なら `0x04` を返します。起動時のサンプルでは `OperationStatus` がこの設定です。
+
+列挙型を含む `GROUP_VALIDATE` には、そのグループの項目だけを持つ構造体を生成します。判定関数には仮更新後の値を渡し、列挙型のメンバーには変換済みの値を格納します。判定に使うRAMの値が未定義なら `0x04` を返します。起動時のサンプルでは `serial_settings` がこの例です。
+
+開発元は [src/editor](src/editor/) のTypeScriptとHTMLひな型です。Node.jsとnpmを使って、リポジトリのルートで実行します。
+
+```sh
+npm ci
+npm run typecheck
+npm run build
+```
+
+`npm run build` は型検査後、JavaScriptをひな型に埋め込み、配布用の単一HTMLを更新します。HTMLに保存済みの編集データも引き継ぎます。
+
+列挙型のない定義は、現行Python版との照合に使えます。同じレジスタ定義のExcel原本と、ブラウザで保存したC/HのZIPを用意します。`requirements.txt` の依存を入れた開発環境で次を実行すると、11ファイルの名前と内容をバイト単位で比較できます。
+
+```sh
+python -B tools/verify-editor-trace.py definition.xlsx modbus-slave-generated.zip
+```
+
 ## 1.なぜ作ったか
 
 Modbus のレジマップやプロトコル部分は仕様書で厳密に決まっている一方で，

@@ -28,4 +28,9 @@ Thumbs.db
 
 # ---- HTML ----
 *.html
+!/modbus-regmap-editor.html
+!/src/editor/editor.template.html
 .onefile_html_cache/
+
+# ---- TypeScript editor dependencies ----
+node_modules/
