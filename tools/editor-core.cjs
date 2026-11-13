@@ -1,0 +1,14 @@
+"use strict";
+const fs = require("node:fs");
+const vm = require("node:vm");
+const path = require("node:path");
+const html = fs.readFileSync(path.join(__dirname, "../modbus-regmap-editor.html"), "utf8");
+const scripts = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/gi)].filter(m => !/type="application\/json"/i.test(m[1]));
+if (scripts.length !== 1) throw Error("Expected one editor script");
+const script = scripts[0][2];
+new vm.Script(script);
+const boundary = script.indexOf("const editorTabs =");
+if (boundary < 0) throw Error("Missing pure generator boundary");
+const core = vm.createContext({});
+vm.runInContext(script.slice(0, boundary), core);
+module.exports = core;

@@ -15,7 +15,9 @@
     "src/editor/model.ts",
     "src/editor/generator-templates.ts",
     "src/editor/generator.ts",
+    "src/editor/nvm-generator.ts",
     "src/editor/enum-editor.ts",
+    "src/editor/bitset-editor.ts",
     "src/editor/html-save.ts",
     "src/editor/editor.ts"
   ]

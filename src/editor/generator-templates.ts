@@ -12,6 +12,18 @@ const REGMAP_HEADER = String.raw`#ifndef MODBUS_REG_MAP_SLAVE_H
 #define NVM_MAX_OFFSET     (NVM_TOTAL_SIZE - 1U)
 #define NVM_OFFSET_UNUSED  (NVM_TOTAL_SIZE)
 
+/* Maximum byte size of one NVM-backed register entry. */
+#define NVM_MAX_ENTRY_SIZE_BYTES (@NVM_MAX_ENTRY_SIZE_BYTES@U)
+
+#endif
+`;
+
+const REGMAP_INTERNAL_HEADER = String.raw`#ifndef MODBUS_REG_MAP_SLAVE_INTERNAL_H
+#define MODBUS_REG_MAP_SLAVE_INTERNAL_H
+
+/* Generated implementation only. Application code uses the public APIs. */
+#include "modbus_reg_map_slave.h"
+
 typedef enum {
     REG_TYPE_UINT16,
     REG_TYPE_UINT32,
@@ -118,22 +130,21 @@ const ACCESS_HEADER_START = String.raw`#ifndef MODBUS_REG_ACCESS_SLAVE_H
 /* Access constants and function prototypes */`;
 
 const ACCESS_SOURCE_START = String.raw`#include "modbus_reg_access_slave.h"
-#include "modbus_reg_map_slave.h"
+#include "modbus_reg_map_slave_internal.h"
 #include "modbus_reg_idx_slave.h"
-#include "modbus_reg_update_notify_slave.h"`;
+#include "modbus_reg_update_notify_slave.h"
+#include "modbus_reg_nvm_slave.h"`;
 
 const ACCESS_NVM_HELPER = String.raw`
-extern void NVM_Request_Write_Bytes(uint16_t offset,
-                                    const uint8_t *data,
-                                    uint16_t length);
-
 /* Access function implementations */
 
 static void write_nvm_if_used(uint16_t offset, const void *data, uint16_t length)
 {
+    (void)data;
+    (void)length;
     if (offset != NVM_OFFSET_UNUSED)
     {
-        NVM_Request_Write_Bytes(offset, (const uint8_t *)data, length);
+        modbus_reg_nvm_mark_dirty();
     }
 }
 `;
@@ -195,11 +206,10 @@ const PARSER_HEADER = String.raw`/*
 
 #define MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY  (0x06U)
 
-extern void NVM_Request_Write_Bytes(uint16_t offset,
-                                    const uint8_t *data,
-                                    uint16_t length);
-
 extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
+
+/* Implement in handwritten code. Return nonzero to accept the address. */
+uint8_t modbus_user_accept_slave_address(uint8_t address);
 
 void modbus_send_exception_response(uint8_t slave_addr, uint8_t function_code, uint8_t exception_code);
 void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
@@ -209,9 +219,10 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
 
 const PARSER_SOURCE = String.raw`#include "modbus_parser.h"
 @ENUM_INCLUDE@
-#include "modbus_reg_map_slave.h"
+#include "modbus_reg_map_slave_internal.h"
 #include "modbus_reg_idx_slave.h"
 #include "modbus_reg_update_notify_slave.h"
+#include "modbus_reg_nvm_slave.h"
 #include "modbus_reg_write_guard_slave.h"
 #include <string.h>
 
@@ -232,6 +243,7 @@ const PARSER_SOURCE = String.raw`#include "modbus_parser.h"
 
 /* Protocol Constants */
 #define MODBUS_MIN_FRAME_LENGTH            (8U)  /* addr + func + data + CRC */
+#define MODBUS_MAX_FRAME_LENGTH            (256U)
 #define MODBUS_SINGLE_REG_DATA_LENGTH      (4U)  /* 2 bytes address + 2 bytes data */
 #define MODBUS_WRITE_MULTI_HEADER_LENGTH   (7U)  /* 7 = addr(1) + func(1) + start(2) + count(2) + byte count(1) */
 
@@ -432,8 +444,14 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
 
     int status = 0;
 
-    if ((rx_buf != (const uint8_t *)0) && (len >= MODBUS_MIN_FRAME_LENGTH))
+    if ((rx_buf != (const uint8_t *)0) && (len >= MODBUS_MIN_FRAME_LENGTH) &&
+        (len <= MODBUS_MAX_FRAME_LENGTH))
     {
+        if (modbus_user_accept_slave_address(rx_buf[0]) == 0U)
+        {
+            return;
+        }
+
         if (modbus_validate_crc(rx_buf, len) != 0)
         {
             slave_addr = rx_buf[0];
@@ -552,11 +570,11 @@ void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16
     uint16_t frame_len = 0U;
     int is_valid = 1;
 
-    if ((rx_buf == (const uint8_t *)0) || (len == 0U))
+    if ((rx_buf == (const uint8_t *)0) || (len < MODBUS_MIN_FRAME_LENGTH))
     {
         is_valid = 0;
     }
-    else if (len > (sizeof(frame) - 2U))
+    else if (len > (uint16_t)sizeof(frame))
     {
         is_valid = 0;
     }
@@ -565,12 +583,12 @@ void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16
     {
         frame[0] = slave_addr;
 
-        for (i = 1U; i < len; ++i)
+        for (i = 1U; i < (uint16_t)(len - 2U); ++i)
         {
             frame[i] = rx_buf[i];
         }
 
-        frame_len = modbus_append_crc(frame, len);
+        frame_len = modbus_append_crc(frame, (uint16_t)(len - 2U));
 
         ModbusPort_RequestSend(frame, frame_len);
     }
@@ -708,7 +726,9 @@ uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
 }
 `;
 
-const PARSER_ATOMIC = String.raw`typedef union
+const PARSER_ATOMIC = String.raw`@SNAPSHOT_TYPE@
+@GROUP_COPY_TYPE@
+typedef union
 {
     uint8_t bytes[MODBUS_MAX_DATA_LENGTH];
     uint32_t align_uint32;
@@ -846,7 +866,8 @@ static int decode_entry_after_value(const reg_table_entry_t *entry,
                            ((uint32_t)data[i * 4U + 1U] << 16U) |
                            ((uint32_t)data[i * 4U + 2U] << 8U) |
                            (uint32_t)data[i * 4U + 3U];
-                if ((conv.f < min_float[i]) || (conv.f > max_float[i]))
+                if (!((conv.f >= min_float[i]) &&
+                      (conv.f <= max_float[i])))
                 {
                     return -1;
                 }
@@ -930,7 +951,9 @@ static int handle_modbus_multi_write(uint16_t start_addr,
     const reg_table_entry_t *entry;
     void *after_value;
     modbus_reg_snapshot_t snapshot;
+@GROUP_COPY_VAR@
     modbus_write_result_t user_result;
+    uint8_t nvm_changed = 0U;
 @GROUP_FLAGS@
 
     if ((data == (const uint8_t *)0) || (num_regs == 0U) ||
@@ -1008,12 +1031,14 @@ static int handle_modbus_multi_write(uint16_t start_addr,
             (void)memcpy(entry->ram_ptr, after_value, entry->size);
             if (entry->nvm_offset != NVM_OFFSET_UNUSED)
             {
-                NVM_Request_Write_Bytes(entry->nvm_offset,
-                                        (const uint8_t *)entry->ram_ptr,
-                                        entry->size);
+                nvm_changed = 1U;
             }
         }
         expected = (uint16_t)(expected + entry_register_count(entry));
+    }
+    if (nvm_changed != 0U)
+    {
+        modbus_reg_nvm_mark_dirty();
     }
     return 0;
 }

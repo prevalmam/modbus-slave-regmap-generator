@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && node tools/build-editor.mjs"
+    "build": "tsc && node tools/build-editor.mjs",
+    "test": "node --test tools/test-editor-*.cjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"

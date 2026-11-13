@@ -110,6 +110,7 @@ table { border-spacing: 0; width: 100%; text-align: left; }
 .registers { min-width: 850px; table-layout: fixed; }
 .enum-cell { padding-inline: 7px; background: #f0f8f5; overflow-wrap: anywhere; }
 .enum-cell .badge { padding-inline: 5px; }
+.bitset-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
 td { padding: 5px 5px; border-bottom: 1px solid #eaf0f5; }
 tbody tr:nth-child(even) { background: #f8fafc; }
@@ -169,6 +170,13 @@ textarea { resize: vertical; }
 .enum-form .enum-notes { color: var(--muted); margin: 4px 0 8px; font-size: .86rem; }
 #enum-status { color: var(--accent); }
 #enum-status.error { color: var(--error); }
+#bitset-status.error { color: var(--error); }
+#bitset-list { list-style: none; padding: 0; }
+#bitset-list button { width: 100%; text-align: left; white-space: normal; }
+#bitset-list code { display: block; }
+#bitset-list button[aria-pressed="true"] { background: var(--soft); }
+#bitset-detail-bits { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+#bitset-detail-bits label { display: inline-flex; align-items: center; gap: 5px; }
 #enum-title { margin: 0; }
 .enum-intro { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px; }
 .enum-intro p { flex-basis: 100%; color: var(--muted); margin: 0; }
@@ -218,6 +226,9 @@ textarea { resize: vertical; }
   .intro button, .toolbar input, .toolbar select, .toolbar button { min-height: 30px; }
   .toolbar, .table-foot { padding-block: 4px; }
 }
+.reset-memberships {display: flex; flex-wrap: wrap; gap: 8px 16px;}
+.reset-memberships label {display: inline-flex; gap: 5px; align-items: center;}
+.reset-memberships input {width: auto;}
 </style>
 </head>
 <body>
@@ -254,6 +265,7 @@ textarea { resize: vertical; }
   <div class="editor-tabs" role="tablist" aria-label="編集対象">
     <button type="button" role="tab" id="register-tab" aria-controls="register-panel" aria-selected="true">レジスタ</button>
     <button type="button" role="tab" id="enum-tab" aria-controls="enum-panel" aria-selected="false" tabindex="-1">列挙型</button>
+    <button type="button" role="tab" id="bitset-tab" aria-controls="bitset-panel" aria-selected="false" tabindex="-1">ビット定義</button>
   </div>
 
   <div class="editor-panel" id="register-panel" role="tabpanel" aria-labelledby="register-tab">
@@ -261,6 +273,7 @@ textarea { resize: vertical; }
     <label>スレーブアドレス <input id="slave-address" inputmode="numeric" class="mono"></label>
     <label>NVMサイズ <input id="nvm-size" inputmode="numeric" class="mono"> B</label>
     <button type="button" id="open-lengths">配列長定義 <span id="length-count"></span></button>
+    <button type="button" id="open-reset-groups">部分初期化グループ</button>
     <div class="origin"><span>編集中</span><span id="source" class="badge"></span><button type="button" class="plain small" id="reset-sample">サンプルを開く</button></div>
   </section>
 
@@ -327,6 +340,19 @@ textarea { resize: vertical; }
       </form>
     </div>
   </section>
+  <section class="editor-panel" id="bitset-panel" role="tabpanel" aria-labelledby="bitset-tab" hidden>
+    <div class="enum-intro"><h2>ビット定義の登録</h2><p>番号・識別名・表示名を定義し、レジスタの詳細から初期値を選びます。</p></div>
+    <div class="enum-workspace">
+      <section class="card enum-types"><div class="actions"><h3>ビット定義一覧</h3><button type="button" class="small" id="bitset-add">＋ 定義を追加</button></div><ul id="bitset-list"></ul></section>
+      <form class="card enum-form" id="bitset-form">
+        <h3>ビット定義</h3>
+        <div class="field-grid"><label>定義ID <input id="bitset-id" required pattern="[a-z][a-z0-9_]*"></label><label>表示名 <input id="bitset-label" required></label>
+          <label>幅 <select id="bitset-width"><option value="16">16 bit</option><option value="32">32 bit</option></select></label></div>
+        <div class="table-wrap"><table class="enum-members"><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
+        <div class="actions"><button type="button" class="small" id="bitset-add-bit">＋ ビットを追加</button><button type="submit" class="primary small">登録</button><span id="bitset-status" role="status"></span></div>
+      </form>
+    </div>
+  </section>
 </main>
 
 <dialog id="detail-dialog" aria-labelledby="detail-title">
@@ -349,15 +375,23 @@ textarea { resize: vertical; }
       </div>
       <p style="margin: 7px 0 0">グループ検証を使わない場合は <code>-</code> を入力します。</p>
     </section>
+    <section class="detail-section" aria-labelledby="reset-memberships-title">
+      <h3 id="reset-memberships-title">部分初期化</h3>
+      <p>所属する初期化グループを選択します。</p>
+      <div class="reset-memberships" id="detail-reset-memberships"></div>
+    </section>
     <section class="detail-section" id="enum-detail" aria-labelledby="enum-detail-title" hidden>
       <h3 id="enum-detail-title">値の指定</h3>
       <p>列挙型を指定した行では、型付きのgetter／setterを生成します。</p>
       <div class="field-grid">
         <label class="wide">指定方式
-          <select id="enum-detail-kind"><option value="range">数値範囲</option><option value="enum">列挙型</option></select>
+          <select id="enum-detail-kind"><option value="range">数値範囲</option><option value="enum">列挙型</option><option value="bitset">ビット定義</option></select>
         </label>
         <label data-enum-detail hidden>列挙型 <select id="enum-detail-type"></select></label>
         <label data-enum-detail hidden>初期値 <select id="enum-detail-default"></select></label>
+        <label data-bitset-detail hidden>ビット定義 <select id="bitset-detail-type"></select></label>
+        <label data-bitset-detail hidden>初期値（hex／整数） <input id="bitset-detail-default" class="mono"></label>
+        <div class="wide" data-bitset-detail hidden id="bitset-detail-bits"></div>
       </div>
     </section>
     <section class="detail-section reference" aria-labelledby="reference-title">
@@ -375,6 +409,15 @@ textarea { resize: vertical; }
   <div class="dialog-foot actions">
     <button type="button" class="danger" id="delete-row">この行を削除</button>
     <button type="button" class="primary" data-close>表に戻る</button>
+  </div>
+</dialog>
+
+<dialog id="reset-group-dialog" aria-labelledby="reset-group-title">
+  <div class="dialog-title"><h2 id="reset-group-title">部分初期化グループ</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
+    <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
+    <button type="button" id="add-reset-group">＋ グループを追加</button>
   </div>
 </dialog>
 

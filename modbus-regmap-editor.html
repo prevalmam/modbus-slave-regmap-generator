@@ -111,6 +111,7 @@ table { border-spacing: 0; width: 100%; text-align: left; }
 .registers { min-width: 850px; table-layout: fixed; }
 .enum-cell { padding-inline: 7px; background: #f0f8f5; overflow-wrap: anywhere; }
 .enum-cell .badge { padding-inline: 5px; }
+.bitset-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
 td { padding: 5px 5px; border-bottom: 1px solid #eaf0f5; }
 tbody tr:nth-child(even) { background: #f8fafc; }
@@ -170,6 +171,13 @@ textarea { resize: vertical; }
 .enum-form .enum-notes { color: var(--muted); margin: 4px 0 8px; font-size: .86rem; }
 #enum-status { color: var(--accent); }
 #enum-status.error { color: var(--error); }
+#bitset-status.error { color: var(--error); }
+#bitset-list { list-style: none; padding: 0; }
+#bitset-list button { width: 100%; text-align: left; white-space: normal; }
+#bitset-list code { display: block; }
+#bitset-list button[aria-pressed="true"] { background: var(--soft); }
+#bitset-detail-bits { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+#bitset-detail-bits label { display: inline-flex; align-items: center; gap: 5px; }
 #enum-title { margin: 0; }
 .enum-intro { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 8px; }
 .enum-intro p { flex-basis: 100%; color: var(--muted); margin: 0; }
@@ -219,6 +227,9 @@ textarea { resize: vertical; }
   .intro button, .toolbar input, .toolbar select, .toolbar button { min-height: 30px; }
   .toolbar, .table-foot { padding-block: 4px; }
 }
+.reset-memberships {display: flex; flex-wrap: wrap; gap: 8px 16px;}
+.reset-memberships label {display: inline-flex; gap: 5px; align-items: center;}
+.reset-memberships input {width: auto;}
 </style>
 </head>
 <body>
@@ -255,6 +266,7 @@ textarea { resize: vertical; }
   <div class="editor-tabs" role="tablist" aria-label="編集対象">
     <button type="button" role="tab" id="register-tab" aria-controls="register-panel" aria-selected="true">レジスタ</button>
     <button type="button" role="tab" id="enum-tab" aria-controls="enum-panel" aria-selected="false" tabindex="-1">列挙型</button>
+    <button type="button" role="tab" id="bitset-tab" aria-controls="bitset-panel" aria-selected="false" tabindex="-1">ビット定義</button>
   </div>
 
   <div class="editor-panel" id="register-panel" role="tabpanel" aria-labelledby="register-tab">
@@ -262,6 +274,7 @@ textarea { resize: vertical; }
     <label>スレーブアドレス <input id="slave-address" inputmode="numeric" class="mono"></label>
     <label>NVMサイズ <input id="nvm-size" inputmode="numeric" class="mono"> B</label>
     <button type="button" id="open-lengths">配列長定義 <span id="length-count"></span></button>
+    <button type="button" id="open-reset-groups">部分初期化グループ</button>
     <div class="origin"><span>編集中</span><span id="source" class="badge"></span><button type="button" class="plain small" id="reset-sample">サンプルを開く</button></div>
   </section>
 
@@ -328,6 +341,19 @@ textarea { resize: vertical; }
       </form>
     </div>
   </section>
+  <section class="editor-panel" id="bitset-panel" role="tabpanel" aria-labelledby="bitset-tab" hidden>
+    <div class="enum-intro"><h2>ビット定義の登録</h2><p>番号・識別名・表示名を定義し、レジスタの詳細から初期値を選びます。</p></div>
+    <div class="enum-workspace">
+      <section class="card enum-types"><div class="actions"><h3>ビット定義一覧</h3><button type="button" class="small" id="bitset-add">＋ 定義を追加</button></div><ul id="bitset-list"></ul></section>
+      <form class="card enum-form" id="bitset-form">
+        <h3>ビット定義</h3>
+        <div class="field-grid"><label>定義ID <input id="bitset-id" required pattern="[a-z][a-z0-9_]*"></label><label>表示名 <input id="bitset-label" required></label>
+          <label>幅 <select id="bitset-width"><option value="16">16 bit</option><option value="32">32 bit</option></select></label></div>
+        <div class="table-wrap"><table class="enum-members"><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
+        <div class="actions"><button type="button" class="small" id="bitset-add-bit">＋ ビットを追加</button><button type="submit" class="primary small">登録</button><span id="bitset-status" role="status"></span></div>
+      </form>
+    </div>
+  </section>
 </main>
 
 <dialog id="detail-dialog" aria-labelledby="detail-title">
@@ -350,15 +376,23 @@ textarea { resize: vertical; }
       </div>
       <p style="margin: 7px 0 0">グループ検証を使わない場合は <code>-</code> を入力します。</p>
     </section>
+    <section class="detail-section" aria-labelledby="reset-memberships-title">
+      <h3 id="reset-memberships-title">部分初期化</h3>
+      <p>所属する初期化グループを選択します。</p>
+      <div class="reset-memberships" id="detail-reset-memberships"></div>
+    </section>
     <section class="detail-section" id="enum-detail" aria-labelledby="enum-detail-title" hidden>
       <h3 id="enum-detail-title">値の指定</h3>
       <p>列挙型を指定した行では、型付きのgetter／setterを生成します。</p>
       <div class="field-grid">
         <label class="wide">指定方式
-          <select id="enum-detail-kind"><option value="range">数値範囲</option><option value="enum">列挙型</option></select>
+          <select id="enum-detail-kind"><option value="range">数値範囲</option><option value="enum">列挙型</option><option value="bitset">ビット定義</option></select>
         </label>
         <label data-enum-detail hidden>列挙型 <select id="enum-detail-type"></select></label>
         <label data-enum-detail hidden>初期値 <select id="enum-detail-default"></select></label>
+        <label data-bitset-detail hidden>ビット定義 <select id="bitset-detail-type"></select></label>
+        <label data-bitset-detail hidden>初期値（hex／整数） <input id="bitset-detail-default" class="mono"></label>
+        <div class="wide" data-bitset-detail hidden id="bitset-detail-bits"></div>
       </div>
     </section>
     <section class="detail-section reference" aria-labelledby="reference-title">
@@ -376,6 +410,15 @@ textarea { resize: vertical; }
   <div class="dialog-foot actions">
     <button type="button" class="danger" id="delete-row">この行を削除</button>
     <button type="button" class="primary" data-close>表に戻る</button>
+  </div>
+</dialog>
+
+<dialog id="reset-group-dialog" aria-labelledby="reset-group-title">
+  <div class="dialog-title"><h2 id="reset-group-title">部分初期化グループ</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
+    <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
+    <button type="button" id="add-reset-group">＋ グループを追加</button>
   </div>
 </dialog>
 
@@ -435,7 +478,7 @@ textarea { resize: vertical; }
 <script>
 "use strict";
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"];
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"];
@@ -448,6 +491,15 @@ const DETAIL_TEXT_FIELDS = ["groupValidate", ...NOTES];
 const TEXT_FIELDS = [...TABLE_FIELDS, ...DETAIL_TEXT_FIELDS];
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENUM_ID = /^[a-z][a-z0-9_]*$/;
+const NVM_API_SYMBOLS = new Set([
+    "modbus_reset_group_t", "modbus_reset_result_t", "modbus_nvm_capture_result_t",
+    "modbus_nvm_restore_result_t", "modbus_reg_load_defaults", "modbus_reg_reset_defaults",
+    "modbus_reg_nvm_mark_dirty", "modbus_reg_nvm_capture_if_changed", "modbus_reg_nvm_restore",
+    "MODBUS_REG_NVM_SLAVE_H", "MODBUS_RESET_GROUP_COUNT", "MODBUS_RESET_OK", "MODBUS_RESET_INVALID_GROUP",
+    "MODBUS_NVM_CAPTURE_UNCHANGED", "MODBUS_NVM_CAPTURE_CAPTURED", "MODBUS_NVM_CAPTURE_INVALID_ARG",
+    "MODBUS_NVM_CAPTURE_BUFFER_TOO_SMALL", "MODBUS_NVM_RESTORE_OK", "MODBUS_NVM_RESTORE_REPAIRED",
+    "MODBUS_NVM_RESTORE_INVALID_ARG", "MODBUS_NVM_RESTORE_SIZE_MISMATCH"
+]);
 const C_KEYWORDS = new Set("auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while".split(" "));
 const isName = (value) => IDENTIFIER.test(value) && !C_KEYWORDS.has(value);
 const scalarText = (value) => value == null ? "" : String(value);
@@ -481,8 +533,15 @@ function draftRow(data = {}) {
         address: "0", name: "", type: "uint16_t", length: "1",
         access: "RW", min: "0", max: "65535", default: "0", nvmOffset: "",
         updateNotify: false, busyReject: false, writeCheck: false, groupValidate: UNUSED,
-        unit: UNUSED, summary: UNUSED, description: UNUSED, spec: UNUSED, notes: UNUSED, enumDomain: null
+        unit: UNUSED, summary: UNUSED, description: UNUSED, spec: UNUSED, notes: UNUSED,
+        enumDomain: null, bitsetDomain: null, resetGroups: []
     };
+    if (Object.hasOwn(data, "resetGroups")) {
+        if (!isList(data.resetGroups) || !data.resetGroups.every(id => typeof id === "string")) {
+            throw Error("resetGroups はグループIDの配列で指定してください。");
+        }
+        row.resetGroups = [...data.resetGroups];
+    }
     for (const key of FLAGS) {
         if (!Object.hasOwn(data, key))
             continue;
@@ -503,6 +562,8 @@ function draftRow(data = {}) {
 function sampleProject() {
     return {
         config: { slaveAddress: "1", nvmSize: "256" },
+        bitsetDefs: [],
+        resetGroupDefs: [{ id: "settings", label: "設定の初期化" }],
         lengthDefs: [{ name: "NAME_LEN", length: "12" }],
         enums: [{
                 id: "modbus_parity", label: "Modbusパリティ", members: [
@@ -529,9 +590,9 @@ function sampleProject() {
                     updateNotify: true, writeCheck: true, summary: "運転状態の書き込み判定例" }),
                 enumDomain: { kind: "enum", enumId: "modbus_operation_status", defaultMemberId: "init" } },
             draftRow({ address: 106, name: "ModbusBaudrate", max: 2, default: 1, nvmOffset: "0x000C",
-                updateNotify: true, groupValidate: "serial_settings", summary: "通信速度の設定例" }),
+                updateNotify: true, groupValidate: "serial_settings", summary: "通信速度の設定例", resetGroups: ["settings"] }),
             { ...draftRow({ address: 107, name: "ModbusParityBit", max: 2, nvmOffset: "0x000E",
-                    updateNotify: true, groupValidate: "serial_settings", summary: "パリティの設定例" }),
+                    updateNotify: true, groupValidate: "serial_settings", summary: "パリティの設定例", resetGroups: ["settings"] }),
                 enumDomain: { kind: "enum", enumId: "modbus_parity", defaultMemberId: "none" } },
             draftRow({ address: 108, name: "reserved_108", type: "reserved", length: 2,
                 access: UNUSED, min: UNUSED, max: UNUSED, default: UNUSED, nvmOffset: UNUSED })
@@ -582,6 +643,42 @@ function decodeEnum(value, invalid) {
             return { id: member.id, value: member.value, label: member.label };
         }) };
 }
+function bitsetDefinitionError(definition) {
+    if (!ENUM_ID.test(definition.id) || !definition.label.trim())
+        return "型IDと表示名を入力してください。";
+    if (definition.width !== 16 && definition.width !== 32)
+        return "幅は16または32にしてください。";
+    if (!definition.bits.length || definition.bits.length > definition.width)
+        return "ビット定義は1件以上、幅以下にしてください。";
+    const ids = new Set(), positions = new Set();
+    for (const bit of definition.bits) {
+        if (!ENUM_ID.test(bit.id) || !isName(bit.id) || !bit.label.trim() || !Number.isInteger(bit.bit) ||
+            bit.bit < 0 || bit.bit >= definition.width)
+            return "ビット番号・識別名・表示名を確認してください。";
+        if (ids.has(bit.id) || positions.has(bit.bit))
+            return "ビット番号と識別名の重複を確認してください。";
+        ids.add(bit.id);
+        positions.add(bit.bit);
+    }
+    return "";
+}
+function bitMaskName(definition, bit) {
+    return (definition.id + "_" + bit.id + "_MASK").toUpperCase();
+}
+function bitsetHex(value, width) {
+    return "0x" + value.toString(16).toUpperCase().padStart(width / 4, "0");
+}
+function decodeBitset(value, invalid) {
+    if (!isObject(value) || typeof value.id !== "string" || typeof value.label !== "string" ||
+        (value.width !== 16 && value.width !== 32) || !isList(value.bits))
+        throw Error(invalid);
+    return { id: value.id, label: value.label, width: value.width, bits: value.bits.map(bit => {
+            if (!isObject(bit) || typeof bit.bit !== "number" || typeof bit.id !== "string" ||
+                typeof bit.label !== "string")
+                throw Error(invalid);
+            return { bit: bit.bit, id: bit.id, label: bit.label };
+        }) };
+}
 function importTableRow(row) {
     if (!isObject(row) || !Object.hasOwn(row, "Reg_Addr") || !Object.hasOwn(row, "VarName")) {
         throw Error("RegisterTableのレジスタ行を読み取れません。");
@@ -612,14 +709,15 @@ function decodeProject(input) {
     const { source, rows } = documentValue;
     if (isObject(source) && source.sheet === "RegisterTable" && isList(rows)) {
         return {
-            project: { config: { slaveAddress: "", nvmSize: "" }, lengthDefs: [], enums: [],
+            project: { config: { slaveAddress: "", nvmSize: "" }, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
                 registers: rows.map(importTableRow) },
             hint: "レジスタ表を読み込みました。スレーブアドレスとNVMサイズを入力してください。"
         };
     }
-    const { format, schemaVersion, config, lengthDefs, registers, enums } = documentValue;
+    const { format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs } = documentValue;
     const legacy = schemaVersion === 1;
-    const hasDomains = schemaVersion === SCHEMA_VERSION;
+    const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
+    const hasResetGroups = schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
     const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
     const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
             (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
@@ -630,10 +728,19 @@ function decodeProject(input) {
     }
     if (hasDomains && !isList(enums))
         throw Error(invalid);
+    if (schemaVersion === SCHEMA_VERSION && !isList(bitsetDefs))
+        throw Error(invalid);
+    if (hasResetGroups && (!isList(resetGroupDefs) ||
+        !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
+        throw Error(invalid);
+    }
     const definitions = hasDomains && isList(enums) ? enums.map(value => decodeEnum(value, invalid)) : [];
     const project = {
         config: { slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize) },
         enums: definitions,
+        bitsetDefs: schemaVersion === SCHEMA_VERSION && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
+        resetGroupDefs: hasResetGroups ?
+            resetGroupDefs.map(group => ({ ...group })) : [],
         lengthDefs: lengthDefs.map(row => {
             if (!isObject(row) || typeof row.name !== "string" || !isScalar(row.length))
                 throw Error(invalid);
@@ -642,10 +749,18 @@ function decodeProject(input) {
         registers: registers.map(row => {
             if (!isObject(row) || !fields.every(key => Object.hasOwn(row, key)))
                 throw Error(invalid);
+            if (hasResetGroups && (!isList(row.resetGroups) ||
+                !row.resetGroups.every(id => typeof id === "string")))
+                throw Error(invalid);
             if (hasDomains) {
                 const domain = row.valueDomain;
                 if (!isObject(domain))
                     throw Error(invalid);
+                if (schemaVersion === SCHEMA_VERSION && domain.kind === "bitset" &&
+                    typeof domain.bitsetId === "string" && typeof domain.default === "number") {
+                    return { ...draftRow({ ...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default }),
+                        bitsetDomain: { kind: "bitset", bitsetId: domain.bitsetId, default: domain.default } };
+                }
                 if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
                     const definition = definitions.find(item => item.id === domain.enumId);
                     const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
@@ -687,9 +802,24 @@ function inspectProject(project) {
         issue("レジスタを1件以上追加してください。");
     const lengths = new Map();
     const lengthDefs = [];
+    const busyCallbackSymbols = new Set(project.registers.filter(row => row.busyReject && row.type !== "reserved")
+        .map(row => "modbus_user_is_busy_" + row.name.trim()));
+    const resetGroupDefs = (project.resetGroupDefs ?? []).map(group => ({ id: group.id.trim(), label: group.label.trim() }));
+    const resetIds = new Set();
+    for (const group of resetGroupDefs) {
+        if (!ENUM_ID.test(group.id) || !group.label)
+            issue("初期化グループのIDと表示名を確認してください。");
+        if (group.id === "count" || resetIds.has(group.id))
+            issue("初期化グループIDが重複または予約名です: " + group.id);
+        resetIds.add(group.id);
+    }
     project.lengthDefs.forEach((entry, index) => {
         const name = entry.name.trim();
+        if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_"))
+            issue("配列長定義が生成APIの予約名です: " + name);
         const length = unsigned(entry.length);
+        if (name === "NVM_MAX_ENTRY_SIZE_BYTES")
+            issue("配列長定義 " + name + " は生成器の予約名です。");
         if (!isName(name))
             issue("配列長定義 " + (index + 1) + " 行目の名前が無効です。");
         else if (lengths.has(name))
@@ -703,9 +833,12 @@ function inspectProject(project) {
     });
     const enumsById = new Map();
     const enumSymbols = new Set([
+        ...NVM_API_SYMBOLS, ...busyCallbackSymbols, ...resetGroupDefs.map(group => "MODBUS_RESET_GROUP_" + group.id.toUpperCase()),
         "reg_type_t", "access_mode_t", "reg_table_entry_t", "modbus_write_result_t", "modbus_reg_snapshot_t",
         "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
-        "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+        "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
+        "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+        "NVM_MAX_ENTRY_SIZE_BYTES",
         ...lengths.keys(), ...project.registers.map(row => row.name.trim())
     ]);
     for (const definition of project.enums) {
@@ -723,6 +856,44 @@ function inspectProject(project) {
             enumSymbols.add(symbol);
         }
     }
+    const bitsetsById = new Map();
+    if ((project.bitsetDefs ?? []).length) {
+        for (const symbol of ["modbus_bit_state_t", "MODBUS_BIT_OFF", "MODBUS_BIT_ON", "MODBUS_REG_BITS_SLAVE_H"]) {
+            if (enumSymbols.has(symbol))
+                issue("ビットAPIのC識別子が重複しています: " + symbol);
+            enumSymbols.add(symbol);
+        }
+    }
+    for (const definition of project.bitsetDefs ?? []) {
+        const error = bitsetDefinitionError(definition);
+        if (error)
+            issue("ビット定義 " + definition.id + "　" + error);
+        if (bitsetsById.has(definition.id))
+            issue("ビット定義IDが重複しています: " + definition.id);
+        bitsetsById.set(definition.id, definition);
+        for (const symbol of [definition.id + "_bits_t", ...definition.bits.map(bit => bitMaskName(definition, bit))]) {
+            if (enumSymbols.has(symbol) || symbol.startsWith("MODBUS_IDX_"))
+                issue("生成するC識別子が重複しています: " + symbol);
+            enumSymbols.add(symbol);
+        }
+    }
+    const bitApiSymbols = new Set(enumSymbols);
+    for (const row of project.registers) {
+        for (const symbol of ["get_" + row.name, "set_" + row.name, "get_" + row.name + "_default",
+            "set_" + row.name + "_masked"])
+            bitApiSymbols.add(symbol);
+    }
+    for (const row of project.registers) {
+        const definition = row.bitsetDomain && bitsetsById.get(row.bitsetDomain.bitsetId);
+        if (!definition)
+            continue;
+        for (const symbol of ["get_" + row.name + "_bits", "set_" + row.name + "_bits", "clear_" + row.name + "_all",
+            ...definition.bits.flatMap(bit => ["get_" + row.name + "_" + bit.id, "set_" + row.name + "_" + bit.id])]) {
+            if (bitApiSymbols.has(symbol))
+                issue("ビットAPIのC識別子が重複しています: " + symbol);
+            bitApiSymbols.add(symbol);
+        }
+    }
     const names = new Set();
     const enumGroups = new Set();
     const addressRanges = [], nvmRanges = [];
@@ -732,10 +903,20 @@ function inspectProject(project) {
     project.registers.forEach((row, index) => {
         const errorCount = errors.length;
         const name = row.name.trim();
+        if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_"))
+            issue("変数名が生成APIの予約名です: " + name, index, "name");
+        if (name === "NVM_MAX_ENTRY_SIZE_BYTES")
+            issue("変数名 " + name + " は生成器の予約名です。", index, "name");
         const label = (index + 1) + " 行目" + (name ? " " + name : "");
         const fail = (field, message) => issue(label + "　" + message, index, field);
         const type = isOneOf(TYPES, row.type) ? row.type : null;
         const reserved = type === "reserved", string = type === "string";
+        const resetGroups = row.resetGroups ?? [];
+        if (new Set(resetGroups).size !== resetGroups.length || resetGroups.some(id => !resetIds.has(id))) {
+            fail("resetGroups", "初期化グループの未定義参照または重複があります。");
+        }
+        if (reserved && resetGroups.length)
+            fail("resetGroups", "予約領域は初期化グループへ所属できません。");
         if (type === null)
             fail("type", "型を選んでください。");
         if (!isName(name))
@@ -766,11 +947,19 @@ function inspectProject(project) {
         if (access === null)
             fail("access", "アクセス権限を選んでください。");
         if (!reserved && access === "RO" && (row.busyReject || row.writeCheck)) {
-            fail("detail", "ROの行ではBUSY拒否と書き込み判定を解除してください。");
+            fail("detail", "Rの行ではBUSY拒否と書き込み判定を解除してください。");
         }
         const groupValidate = reserved ? UNUSED : row.groupValidate.trim();
         if (groupValidate !== UNUSED && !isName(groupValidate)) {
             fail("detail", "グループ検証名を指定してください。使わない場合は - を入力します。");
+        }
+        if (groupValidate !== UNUSED && isName(groupValidate)) {
+            const group = groupValidate.toLowerCase();
+            const symbol = groupAfterType(group);
+            if (!enumGroups.has(group) && enumSymbols.has(symbol)) {
+                fail("detail", "生成するC識別子 " + symbol + " が重複しています。");
+            }
+            enumGroups.add(group);
         }
         for (const key of NOTES) {
             if (row[key].trim() === "") {
@@ -779,7 +968,24 @@ function inspectProject(project) {
             }
         }
         let valueDomain = null;
-        if (row.enumDomain) {
+        if (row.enumDomain && row.bitsetDomain)
+            fail("detail", "値の種類は1つだけ指定してください。");
+        if (row.bitsetDomain) {
+            const definition = bitsetsById.get(row.bitsetDomain.bitsetId);
+            if ((type !== "uint16_t" && type !== "uint32_t") || length !== 1)
+                fail("detail", "ビット定義は配列長1の符号なし整数で指定してください。");
+            if (!definition)
+                fail("detail", "ビット定義を選択してください。");
+            else if ((type === "uint16_t" ? 16 : 32) !== definition.width)
+                fail("detail", "ビット定義の幅とレジスタ型を揃えてください。");
+            const initial = row.bitsetDomain.default;
+            if (numeric(row.default, type === "uint32_t" ? "uint32_t" : "uint16_t") === null ||
+                !Number.isSafeInteger(initial) || initial < 0 || initial > (type === "uint32_t" ? 4294967295 : 65535)) {
+                fail("default", "ビット初期値が型の範囲外です。");
+            }
+            valueDomain = { ...row.bitsetDomain };
+        }
+        else if (row.enumDomain) {
             const definition = enumsById.get(row.enumDomain.enumId);
             if (type !== "uint16_t" || length !== 1)
                 fail("detail", "列挙型は配列長1のuint16_tで指定してください。");
@@ -787,14 +993,6 @@ function inspectProject(project) {
                 fail("detail", "列挙型を選択してください。");
             else if (!definition.members.some(member => member.id === row.enumDomain?.defaultMemberId)) {
                 fail("detail", "列挙型の初期値を選択してください。");
-            }
-            if (groupValidate !== UNUSED && isName(groupValidate)) {
-                const group = groupValidate.toLowerCase();
-                const symbol = groupAfterType(group);
-                if (!enumGroups.has(group) && enumSymbols.has(symbol)) {
-                    fail("detail", "生成するC識別子 " + symbol + " が重複しています。");
-                }
-                enumGroups.add(group);
             }
             valueDomain = { ...row.enumDomain };
         }
@@ -862,7 +1060,7 @@ function inspectProject(project) {
         registers.push({
             address, name, type, length: literalLength ?? row.length.trim(), access, valueDomain, nvmOffset,
             updateNotify: !reserved && row.updateNotify, busyReject: !reserved && row.busyReject,
-            writeCheck: !reserved && row.writeCheck, groupValidate,
+            writeCheck: !reserved && row.writeCheck, groupValidate, resetGroups: [...resetGroups],
             unit: row.unit, summary: row.summary, description: row.description, spec: row.spec, notes: row.notes
         });
         registerCounts.push(registerCount);
@@ -892,7 +1090,8 @@ function inspectProject(project) {
         return { errors, warnings, counts, validated: null };
     }
     const documentValue = {
-        format: FORMAT, schemaVersion: SCHEMA_VERSION, config: { slaveAddress, nvmSize }, lengthDefs, enums: project.enums, registers
+        format: FORMAT, schemaVersion: SCHEMA_VERSION, config: { slaveAddress, nvmSize },
+        lengthDefs, enums: project.enums, bitsetDefs: project.bitsetDefs ?? [], resetGroupDefs, registers
     };
     return { errors, warnings, counts, validated: { documentValue, counts: registerCounts } };
 }
@@ -908,6 +1107,17 @@ const REGMAP_HEADER = String.raw `#ifndef MODBUS_REG_MAP_SLAVE_H
 #define NVM_TOTAL_SIZE     (@NVM_SIZE@U)
 #define NVM_MAX_OFFSET     (NVM_TOTAL_SIZE - 1U)
 #define NVM_OFFSET_UNUSED  (NVM_TOTAL_SIZE)
+
+/* Maximum byte size of one NVM-backed register entry. */
+#define NVM_MAX_ENTRY_SIZE_BYTES (@NVM_MAX_ENTRY_SIZE_BYTES@U)
+
+#endif
+`;
+const REGMAP_INTERNAL_HEADER = String.raw `#ifndef MODBUS_REG_MAP_SLAVE_INTERNAL_H
+#define MODBUS_REG_MAP_SLAVE_INTERNAL_H
+
+/* Generated implementation only. Application code uses the public APIs. */
+#include "modbus_reg_map_slave.h"
 
 typedef enum {
     REG_TYPE_UINT16,
@@ -1012,21 +1222,20 @@ const ACCESS_HEADER_START = String.raw `#ifndef MODBUS_REG_ACCESS_SLAVE_H
 
 /* Access constants and function prototypes */`;
 const ACCESS_SOURCE_START = String.raw `#include "modbus_reg_access_slave.h"
-#include "modbus_reg_map_slave.h"
+#include "modbus_reg_map_slave_internal.h"
 #include "modbus_reg_idx_slave.h"
-#include "modbus_reg_update_notify_slave.h"`;
+#include "modbus_reg_update_notify_slave.h"
+#include "modbus_reg_nvm_slave.h"`;
 const ACCESS_NVM_HELPER = String.raw `
-extern void NVM_Request_Write_Bytes(uint16_t offset,
-                                    const uint8_t *data,
-                                    uint16_t length);
-
 /* Access function implementations */
 
 static void write_nvm_if_used(uint16_t offset, const void *data, uint16_t length)
 {
+    (void)data;
+    (void)length;
     if (offset != NVM_OFFSET_UNUSED)
     {
-        NVM_Request_Write_Bytes(offset, (const uint8_t *)data, length);
+        modbus_reg_nvm_mark_dirty();
     }
 }
 `;
@@ -1086,11 +1295,10 @@ const PARSER_HEADER = String.raw `/*
 
 #define MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY  (0x06U)
 
-extern void NVM_Request_Write_Bytes(uint16_t offset,
-                                    const uint8_t *data,
-                                    uint16_t length);
-
 extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
+
+/* Implement in handwritten code. Return nonzero to accept the address. */
+uint8_t modbus_user_accept_slave_address(uint8_t address);
 
 void modbus_send_exception_response(uint8_t slave_addr, uint8_t function_code, uint8_t exception_code);
 void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
@@ -1099,9 +1307,10 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len);
 `;
 const PARSER_SOURCE = String.raw `#include "modbus_parser.h"
 @ENUM_INCLUDE@
-#include "modbus_reg_map_slave.h"
+#include "modbus_reg_map_slave_internal.h"
 #include "modbus_reg_idx_slave.h"
 #include "modbus_reg_update_notify_slave.h"
+#include "modbus_reg_nvm_slave.h"
 #include "modbus_reg_write_guard_slave.h"
 #include <string.h>
 
@@ -1122,6 +1331,7 @@ const PARSER_SOURCE = String.raw `#include "modbus_parser.h"
 
 /* Protocol Constants */
 #define MODBUS_MIN_FRAME_LENGTH            (8U)  /* addr + func + data + CRC */
+#define MODBUS_MAX_FRAME_LENGTH            (256U)
 #define MODBUS_SINGLE_REG_DATA_LENGTH      (4U)  /* 2 bytes address + 2 bytes data */
 #define MODBUS_WRITE_MULTI_HEADER_LENGTH   (7U)  /* 7 = addr(1) + func(1) + start(2) + count(2) + byte count(1) */
 
@@ -1322,8 +1532,14 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
 
     int status = 0;
 
-    if ((rx_buf != (const uint8_t *)0) && (len >= MODBUS_MIN_FRAME_LENGTH))
+    if ((rx_buf != (const uint8_t *)0) && (len >= MODBUS_MIN_FRAME_LENGTH) &&
+        (len <= MODBUS_MAX_FRAME_LENGTH))
     {
+        if (modbus_user_accept_slave_address(rx_buf[0]) == 0U)
+        {
+            return;
+        }
+
         if (modbus_validate_crc(rx_buf, len) != 0)
         {
             slave_addr = rx_buf[0];
@@ -1442,11 +1658,11 @@ void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16
     uint16_t frame_len = 0U;
     int is_valid = 1;
 
-    if ((rx_buf == (const uint8_t *)0) || (len == 0U))
+    if ((rx_buf == (const uint8_t *)0) || (len < MODBUS_MIN_FRAME_LENGTH))
     {
         is_valid = 0;
     }
-    else if (len > (sizeof(frame) - 2U))
+    else if (len > (uint16_t)sizeof(frame))
     {
         is_valid = 0;
     }
@@ -1455,12 +1671,12 @@ void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16
     {
         frame[0] = slave_addr;
 
-        for (i = 1U; i < len; ++i)
+        for (i = 1U; i < (uint16_t)(len - 2U); ++i)
         {
             frame[i] = rx_buf[i];
         }
 
-        frame_len = modbus_append_crc(frame, len);
+        frame_len = modbus_append_crc(frame, (uint16_t)(len - 2U));
 
         ModbusPort_RequestSend(frame, frame_len);
     }
@@ -1597,7 +1813,9 @@ uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
     return (uint16_t)(len_without_crc + 2U);
 }
 `;
-const PARSER_ATOMIC = String.raw `typedef union
+const PARSER_ATOMIC = String.raw `@SNAPSHOT_TYPE@
+@GROUP_COPY_TYPE@
+typedef union
 {
     uint8_t bytes[MODBUS_MAX_DATA_LENGTH];
     uint32_t align_uint32;
@@ -1735,7 +1953,8 @@ static int decode_entry_after_value(const reg_table_entry_t *entry,
                            ((uint32_t)data[i * 4U + 1U] << 16U) |
                            ((uint32_t)data[i * 4U + 2U] << 8U) |
                            (uint32_t)data[i * 4U + 3U];
-                if ((conv.f < min_float[i]) || (conv.f > max_float[i]))
+                if (!((conv.f >= min_float[i]) &&
+                      (conv.f <= max_float[i])))
                 {
                     return -1;
                 }
@@ -1819,7 +2038,9 @@ static int handle_modbus_multi_write(uint16_t start_addr,
     const reg_table_entry_t *entry;
     void *after_value;
     modbus_reg_snapshot_t snapshot;
+@GROUP_COPY_VAR@
     modbus_write_result_t user_result;
+    uint8_t nvm_changed = 0U;
 @GROUP_FLAGS@
 
     if ((data == (const uint8_t *)0) || (num_regs == 0U) ||
@@ -1897,12 +2118,14 @@ static int handle_modbus_multi_write(uint16_t start_addr,
             (void)memcpy(entry->ram_ptr, after_value, entry->size);
             if (entry->nvm_offset != NVM_OFFSET_UNUSED)
             {
-                NVM_Request_Write_Bytes(entry->nvm_offset,
-                                        (const uint8_t *)entry->ram_ptr,
-                                        entry->size);
+                nvm_changed = 1U;
             }
         }
         expected = (uint16_t)(expected + entry_register_count(entry));
+    }
+    if (nvm_changed != 0U)
+    {
+        modbus_reg_nvm_mark_dirty();
     }
     return 0;
 }
@@ -2094,9 +2317,10 @@ const isNumericEntry = (entry) => isOneOf(NUMERIC_TYPES, entry.type) && typeof e
 const hasGroup = (entry) => entry.type !== "reserved" && entry.groupValidate !== UNUSED;
 const hex = (value, width) => value.toString(16).toUpperCase().padStart(width, "0");
 function generatorEntries(project) {
-    const { lengthDefs, registers, enums } = project.documentValue;
+    const { lengthDefs, registers, enums, bitsetDefs } = project.documentValue;
     const lengths = new Map(lengthDefs.map(entry => [entry.name, entry.length]));
     const definitions = new Map(enums.map(definition => [definition.id, definition]));
+    const bitsById = new Map(bitsetDefs.map(definition => [definition.id, definition]));
     return registers.map(row => {
         const count = typeof row.length === "number" ? row.length : lengths.get(row.length);
         if (count === undefined)
@@ -2105,6 +2329,7 @@ function generatorEntries(project) {
         const array = isOneOf(NUMERIC_TYPES, row.type) && count > 1;
         const { valueDomain, ...fields } = row;
         let definition;
+        let bitsetDefinition;
         let values;
         if (valueDomain.kind === "enum") {
             definition = definitions.get(valueDomain.enumId);
@@ -2113,13 +2338,19 @@ function generatorEntries(project) {
                 throw Error("列挙型または初期値が見つかりません。" + row.name);
             values = range;
         }
+        else if (valueDomain.kind === "bitset") {
+            bitsetDefinition = bitsById.get(valueDomain.bitsetId);
+            if (!bitsetDefinition)
+                throw Error("Missing bitset definition: " + row.name);
+            values = { min: 0, max: bitsetDefinition.width === 32 ? 4294967295 : 65535, default: valueDomain.default };
+        }
         else if (valueDomain.kind === "range") {
             values = { min: valueDomain.min, max: valueDomain.max, default: valueDomain.default };
         }
         else {
             values = { min: UNUSED, max: UNUSED, default: valueDomain.kind === "string" ? valueDomain.default : UNUSED };
         }
-        return { ...fields, ...values, definition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
+        return { ...fields, ...values, definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
             registerCount: bytes / 2,
             enumType: C_TYPES[row.type] + (array ? "_ARRAY" : "") };
     });
@@ -2153,7 +2384,9 @@ function generateRegisterIndex(entries, slaveAddress) {
 }
 function generateRegisterMap(project, entries) {
     const lengthMacros = project.lengthDefs.map(({ name, length }) => `#define ${name} (${length}U)\n`).join("");
-    const header = REGMAP_HEADER.replace("@NVM_SIZE@", String(project.config.nvmSize)).replace("@LENGTH_DEFS@", lengthMacros);
+    const maxEntrySize = entries.reduce((maximum, entry) => entry.type !== "reserved" && entry.nvmOffset !== UNUSED ? Math.max(maximum, entry.bytes) : maximum, 0);
+    const header = REGMAP_HEADER.replace("@NVM_SIZE@", String(project.config.nvmSize))
+        .replace("@NVM_MAX_ENTRY_SIZE_BYTES@", String(maxEntrySize)).replace("@LENGTH_DEFS@", lengthMacros);
     const declarations = [];
     const tableRows = [];
     for (const entry of entries) {
@@ -2193,7 +2426,8 @@ function generateRegisterMap(project, entries) {
     }
     return {
         "modbus_reg_map_slave.h": header,
-        "modbus_reg_map_slave.c": ['#include "modbus_reg_map_slave.h"', "", ...declarations, "",
+        "modbus_reg_map_slave_internal.h": REGMAP_INTERNAL_HEADER,
+        "modbus_reg_map_slave.c": ['#include "modbus_reg_map_slave_internal.h"', "", ...declarations, "",
             "const reg_table_entry_t g_reg_table_slave[] = {", ...tableRows, "};", "", REGMAP_FOOTER].join("\n")
     };
 }
@@ -2211,19 +2445,23 @@ function accessBindings(entry) {
         NOTIFY: entry.updateNotify ? `    modbus_reg_update_notify_internal_set(${indexMacro(entry)});\n` : "" };
 }
 const ENUM_INCLUDE = '#include "modbus_reg_enums_slave.h"';
+const ENUM_INTERNAL_INCLUDE = '#include "modbus_reg_enum_internal_slave.h"';
 function generateEnums(definitions, entries) {
     if (!definitions.length)
         return {};
     const assigned = entries.filter(entry => entry.definition);
-    const header = ["#ifndef MODBUS_REG_ENUMS_SLAVE_H", "#define MODBUS_REG_ENUMS_SLAVE_H", "", "#include <stdint.h>", ""];
-    const source = [ENUM_INCLUDE];
+    const header = ["#ifndef MODBUS_REG_ENUMS_SLAVE_H", "#define MODBUS_REG_ENUMS_SLAVE_H", ""];
+    const internal = ["#ifndef MODBUS_REG_ENUM_INTERNAL_SLAVE_H", "#define MODBUS_REG_ENUM_INTERNAL_SLAVE_H", "",
+        "#include <stdint.h>", ENUM_INCLUDE, ""];
+    const source = [ENUM_INTERNAL_INCLUDE];
     if (assigned.length)
         source.push('#include "modbus_reg_idx_slave.h"');
     source.push("");
     for (const { id, members } of definitions) {
         const type = id + "_t";
         const constants = members.map((member, index) => "    " + enumMemberCName(id, member.id) + " = " + index);
-        header.push("typedef enum", "{", constants.join(",\n"), "} " + type + ";", "", `int ${id}_from_register(uint16_t raw, ${type} *out_value);`, `int ${id}_to_register(${type} value, uint16_t *out_raw);`, "");
+        header.push("typedef enum", "{", constants.join(",\n"), "} " + type + ";", "");
+        internal.push(`int ${id}_from_register(uint16_t raw, ${type} *out_value);`, `int ${id}_to_register(${type} value, uint16_t *out_raw);`, "");
         const table = "s_" + id + "_register_values";
         const values = members.map(member => member.value + "U");
         source.push(`static const uint16_t ${table}[${values.length}U] =
@@ -2265,7 +2503,7 @@ int ${id}_to_register(${type} value, uint16_t *out_raw)
     }
     if (assigned.length) {
         const check = "int modbus_reg_enum_wire_value_is_valid(uint16_t table_index, uint16_t raw)";
-        header.push(check + ";", "");
+        internal.push(check + ";", "");
         source.push(check, "{", "    switch (table_index)", "    {");
         for (const entry of assigned) {
             const id = entry.definition.id;
@@ -2278,7 +2516,9 @@ int ${id}_to_register(${type} value, uint16_t *out_raw)
         source.push("        default:", "            return 1;", "    }", "}", "");
     }
     header.push("#endif", "");
-    return { "modbus_reg_enums_slave.h": header.join("\n"), "modbus_reg_enums_slave.c": source.join("\n") };
+    internal.push("#endif", "");
+    return { "modbus_reg_enums_slave.h": header.join("\n"),
+        "modbus_reg_enum_internal_slave.h": internal.join("\n"), "modbus_reg_enums_slave.c": source.join("\n") };
 }
 function enumAccessSource(entry, definition) {
     const { name } = entry;
@@ -2290,6 +2530,7 @@ function enumAccessSource(entry, definition) {
     return ${id}_from_register(read_uint16(${tableEntry(entry)}.ram_ptr),
                                  out_value);
 }
+
 
 int set_${name}(${id}_t value)
 {
@@ -2307,13 +2548,114 @@ int set_${name}(${id}_t value)
 }
 `;
 }
+function generateBitsetTypes(definitions) {
+    if (!definitions.length)
+        return {};
+    const header = ["#ifndef MODBUS_REG_BITS_SLAVE_H", "#define MODBUS_REG_BITS_SLAVE_H", "", "#include <stdint.h>", "",
+        "typedef enum", "{", "    MODBUS_BIT_OFF = 0,", "    MODBUS_BIT_ON = 1", "} modbus_bit_state_t;", ""];
+    for (const definition of definitions) {
+        for (const bit of definition.bits) {
+            header.push(`#define ${bitMaskName(definition, bit)} (1${definition.width === 32 ? "UL" : "U"} << ${bit.bit})`);
+        }
+        header.push("", "typedef struct", "{", ...definition.bits.map(bit => `    modbus_bit_state_t ${bit.id};`), `} ${definition.id}_bits_t;`, "");
+    }
+    header.push("#endif", "");
+    return { "modbus_reg_bits_slave.h": header.join("\n") };
+}
+function bitsetAccess(entry, definition) {
+    const { name, type } = entry;
+    const bitsType = definition.id + "_bits_t";
+    const raw = `read_${SCALAR_SUFFIX[type]}(${tableEntry(entry)}.ram_ptr)`;
+    const set = `reg_slave_set_${SCALAR_SUFFIX[type]}`;
+    const notify = entry.updateNotify ? `\n    modbus_reg_update_notify_internal_set(${indexMacro(entry)});` : "";
+    const header = [`${type} get_${name}(void);`, `${type} get_${name}_default(void);`,
+        `${bitsType} get_${name}_bits(void);`, `int set_${name}_bits(${bitsType} bits);`, `int clear_${name}_all(void);`];
+    const source = [`${type} get_${name}(void)
+{
+    return ${raw};
+}
+
+${type} get_${name}_default(void)
+{
+    return *(const ${type} *)${tableEntry(entry)}.default_value;
+}
+
+static int apply_${name}_bits_raw(${type} raw)
+{
+    if (${set}(${indexMacro(entry)}, raw) == 0)
+    {
+        return 0;
+    }${notify}
+    return 1;
+}
+
+${bitsType} get_${name}_bits(void)
+{
+    ${bitsType} bits;
+    ${type} raw;
+
+    raw = get_${name}();
+${definition.bits.map(bit => `    bits.${bit.id} = (raw & ${bitMaskName(definition, bit)}) != 0${definition.width === 32 ? "UL" : "U"} ? MODBUS_BIT_ON : MODBUS_BIT_OFF;`).join("\n")}
+    return bits;
+}
+
+int set_${name}_bits(${bitsType} bits)
+{
+    ${type} raw;
+
+${definition.bits.map(bit => `    if ((bits.${bit.id} != MODBUS_BIT_OFF) && (bits.${bit.id} != MODBUS_BIT_ON))
+    {
+        return 0;
+    }`).join("\n")}
+    raw = (${type})(get_${name}() & (${type})~(${definition.bits.map(bit => bitMaskName(definition, bit)).join(" | ")}));
+${definition.bits.map(bit => `    if (bits.${bit.id} == MODBUS_BIT_ON)
+    {
+        raw = (${type})(raw | ${bitMaskName(definition, bit)});
+    }`).join("\n")}
+    return apply_${name}_bits_raw(raw);
+}
+
+int clear_${name}_all(void)
+{
+    return apply_${name}_bits_raw(0${definition.width === 32 ? "UL" : "U"});
+}`];
+    for (const bit of definition.bits) {
+        const mask = bitMaskName(definition, bit);
+        header.push(`modbus_bit_state_t get_${name}_${bit.id}(void);`, `int set_${name}_${bit.id}(modbus_bit_state_t on);`);
+        source.push(`modbus_bit_state_t get_${name}_${bit.id}(void)
+{
+    return (get_${name}() & ${mask}) != 0${definition.width === 32 ? "UL" : "U"} ? MODBUS_BIT_ON : MODBUS_BIT_OFF;
+}
+
+int set_${name}_${bit.id}(modbus_bit_state_t on)
+{
+    ${type} raw;
+
+    if ((on != MODBUS_BIT_OFF) && (on != MODBUS_BIT_ON))
+    {
+        return 0;
+    }
+    raw = (${type})(get_${name}() & (${type})~${mask});
+    if (on == MODBUS_BIT_ON)
+    {
+        raw = (${type})(raw | ${mask});
+    }
+    return apply_${name}_bits_raw(raw);
+}`);
+    }
+    return { header: header.join("\n") + "\n", source: source.join("\n\n") + "\n" };
+}
 function generateAccess(entries) {
     const actual = entries.filter(entry => entry.type !== "reserved");
     const types = new Set(actual.map(entry => entry.type));
     const scalarTypes = new Set(actual.filter(entry => entry.count === 1).map(entry => entry.type));
     const header = [actual.some(entry => entry.definition) ?
             ACCESS_HEADER_START.replace("#include <stdint.h>", "#include <stdint.h>\n" + ENUM_INCLUDE) : ACCESS_HEADER_START];
+    if (actual.some(entry => entry.bitsetDefinition))
+        header.push('#include "modbus_reg_bits_slave.h"');
     const source = [ACCESS_SOURCE_START];
+    if (actual.some(entry => entry.definition))
+        source.push(ENUM_INTERNAL_INCLUDE);
     if (types.has("string"))
         source.push("#include <string.h>");
     source.push(ACCESS_NVM_HELPER);
@@ -2336,6 +2678,11 @@ function generateAccess(entries) {
             const type = entry.definition.id + "_t";
             header.push(`int get_${entry.name}(${type} *out_value);\nint set_${entry.name}(${type} value);\n`);
             source.push(enumAccessSource(entry, entry.definition));
+        }
+        else if (entry.bitsetDefinition) {
+            const bits = bitsetAccess(entry, entry.bitsetDefinition);
+            header.push(bits.header);
+            source.push(bits.source);
         }
         else if (entry.type === "string") {
             header.push(fillC(ACCESS_STRING_H, bindings));
@@ -2421,10 +2768,13 @@ function snapshotField(entry) {
     return entry.type === "string" ? `    modbus_string_view_t ${entry.name};` :
         `    const ${entry.type} *${entry.name};`;
 }
+function validationValueField(entry) {
+    const type = entry.definition ? entry.definition.id + "_t" : entry.type === "string" ? "char" : entry.type;
+    return `    ${type} ${entry.name}${entry.array || entry.type === "string" ? `[${entry.count}U]` : ""};`;
+}
 function generateWriteGuards(entries, groups) {
     const busy = entries.filter(entry => entry.busyReject);
     const checked = entries.filter(entry => entry.writeCheck);
-    const snapshots = entries.filter(hasGroup);
     const header = [`#ifndef MODBUS_REG_WRITE_GUARD_SLAVE_H
 #define MODBUS_REG_WRITE_GUARD_SLAVE_H
 
@@ -2447,27 +2797,18 @@ typedef struct
     const char *data;
     uint16_t length;
 } modbus_string_view_t;
-
-typedef struct
-{`];
-    for (const entry of snapshots) {
-        header.push(snapshotField(entry));
-    }
-    if (!snapshots.length)
-        header.push("    const uint8_t *unused;");
-    header.push("} modbus_reg_snapshot_t;");
+`];
+    header.push("/* Validation arguments own copies; valid only during the callback. */");
     for (const [group, groupEntries] of groups) {
-        if (!groupEntries.some(entry => entry.definition))
-            continue;
         header.push("", "typedef struct", "{");
         for (const entry of groupEntries) {
-            header.push(entry.definition ? `    ${entry.definition.id}_t ${entry.name};` : snapshotField(entry));
+            header.push(validationValueField(entry));
         }
         header.push(`} ${groupAfterType(group)};`);
     }
-    header.push("", "/* BUSY_REJECT accessors */");
+    header.push("", "/* User-provided synchronous BUSY_REJECT callbacks */");
     for (const entry of busy) {
-        header.push(`MB_BOOL modbus_get_busy_reject_${entry.name}(void);`, `void modbus_set_busy_reject_${entry.name}(MB_BOOL busy);`);
+        header.push(`MB_BOOL modbus_user_is_busy_${entry.name}(void);`);
     }
     if (!busy.length)
         header.push("/* No BUSY_REJECT entries. */");
@@ -2487,39 +2828,16 @@ typedef struct
         header.push("/* No WRITE_CHECK callbacks. */");
     header.push("", "/* User-provided GROUP_VALIDATE callbacks */");
     for (const [group, groupEntries] of groups) {
-        const afterType = groupEntries.some(entry => entry.definition) ? groupAfterType(group) : "modbus_reg_snapshot_t";
+        const afterType = groupAfterType(group);
         header.push(`extern modbus_write_result_t modbus_user_group_validate_${group}(`, `    const ${afterType} *after);`);
     }
     if (!groups.size)
         header.push("/* No GROUP_VALIDATE callbacks. */");
     header.push("", "MB_BOOL modbus_write_guard_entry_is_busy(uint16_t reg_table_index);", "", "#endif", "");
     const source = ['#include "modbus_reg_write_guard_slave.h"', '#include "modbus_reg_idx_slave.h"', ""];
-    if (busy.length)
-        source.push(`static uint8_t s_busy_reject_bits[${Math.ceil(busy.length / 8)}U];`, "");
-    busy.forEach(({ name }, bit) => {
-        const cell = `s_busy_reject_bits[${Math.floor(bit / 8)}U]`;
-        const mask = "0x" + hex(1 << (bit % 8), 2) + "U";
-        source.push(`MB_BOOL modbus_get_busy_reject_${name}(void)
-{
-    return ((${cell} & ${mask}) != 0U)
-        ? MB_TRUE : MB_FALSE;
-}
-
-void modbus_set_busy_reject_${name}(MB_BOOL busy)
-{
-    if (busy != MB_FALSE)
-    {
-        ${cell} |= ${mask};
-    }
-    else
-    {
-        ${cell} &= (uint8_t)(~${mask});
-    }
-}`, "");
-    });
     source.push("MB_BOOL modbus_write_guard_entry_is_busy(uint16_t reg_table_index)", "{", "    switch (reg_table_index)", "    {");
     for (const entry of busy) {
-        source.push(`        case ${indexMacro(entry)}:`, `            return modbus_get_busy_reject_${entry.name}();`);
+        source.push(`        case ${indexMacro(entry)}:`, `            return modbus_user_is_busy_${entry.name}();`);
     }
     source.push("        default:", "            return MB_FALSE;", "    }", "}", "");
     return { "modbus_reg_write_guard_slave.h": header.join("\n"), "modbus_reg_write_guard_slave.c": source.join("\n") };
@@ -2551,13 +2869,17 @@ function generateParser(entries, groups) {
         }
         else if (type === "string") {
             checks.push(`        {
+            char current_data[${entry.count}U];
+            char new_data[${entry.count}U];
             modbus_string_view_t current_value;
             modbus_string_view_t new_value;
 
-            current_value.data = (const char *)entry->ram_ptr;
+            (void)memcpy(current_data, entry->ram_ptr, sizeof(current_data));
+            (void)memcpy(new_data, after_value, sizeof(new_data));
+            current_value.data = current_data;
             current_value.length = modbus_string_field_length(
                 current_value.data, entry->size);
-            new_value.data = (const char *)after_value;
+            new_value.data = new_data;
             new_value.length = modbus_string_field_length(
                 new_value.data, entry->size);
             return modbus_user_write_check_${name}(
@@ -2565,10 +2887,15 @@ function generateParser(entries, groups) {
         }`);
         }
         else if (entry.array) {
-            checks.push(`            return modbus_user_write_check_${name}(
-                (const ${type} *)entry->ram_ptr,
-                (const ${type} *)after_value,
-                entry->length);`);
+            checks.push(`        {
+            ${type} current_value[${entry.count}U];
+            ${type} new_value[${entry.count}U];
+
+            (void)memcpy(current_value, entry->ram_ptr, sizeof(current_value));
+            (void)memcpy(new_value, after_value, sizeof(new_value));
+            return modbus_user_write_check_${name}(
+                current_value, new_value, entry->length);
+        }`);
         }
         else {
             checks.push(`            return modbus_user_write_check_${name}(
@@ -2612,24 +2939,24 @@ function generateParser(entries, groups) {
             group_${group}_affected = MB_TRUE;
         }`);
         validation.push(`    if (group_${group}_affected != MB_FALSE)`, "    {");
-        const withEnum = groupEntries.some(entry => entry.definition);
-        if (withEnum) {
-            validation.push(`        ${groupAfterType(group)} after;`, "");
-            for (const { definition, name } of groupEntries) {
-                if (definition) {
-                    validation.push(`        if (${definition.id}_from_register(
-                *snapshot.${name}, &after.${name}) == 0)
+        const after = `validation_copy.${group}`;
+        for (const { definition, name, array, type } of groupEntries) {
+            if (definition) {
+                validation.push(`        if (${definition.id}_from_register(
+                *snapshot.${name}, &${after}.${name}) == 0)
         {
             return MODBUS_EXC_SLAVE_DEVICE_FAILURE;
         }`);
-                }
-                else {
-                    validation.push(`        after.${name} = snapshot.${name};`);
-                }
+            }
+            else if (array || type === "string") {
+                validation.push(`        (void)memcpy(${after}.${name}, snapshot.${name}${type === "string" ? ".data" : ""}, sizeof(${after}.${name}));`);
+            }
+            else {
+                validation.push(`        ${after}.${name} = *snapshot.${name};`);
             }
         }
         validation.push(`        user_result = normalize_user_write_result(
-            modbus_user_group_validate_${group}(&${withEnum ? "after" : "snapshot"}));
+            modbus_user_group_validate_${group}(&${after}));
         if (user_result != MODBUS_WRITE_OK)
         {
             return (int)user_result;
@@ -2637,6 +2964,11 @@ function generateParser(entries, groups) {
     }`);
     }
     const blocks = {
+        "@SNAPSHOT_TYPE@": ["/* Internal pointers never cross the validation callback boundary. */", "typedef struct", "{",
+            ...(snapshots.length ? snapshots.map(snapshotField) : ["    const uint8_t *unused;"]), "} modbus_reg_snapshot_t;", ""],
+        "@GROUP_COPY_TYPE@": groups.size ? ["/* All group callbacks share storage for one isolated value copy. */", "typedef union", "{",
+            ...Array.from(groups.keys(), group => `    ${groupAfterType(group)} ${group};`), "} modbus_validation_copy_t;", ""] : [],
+        "@GROUP_COPY_VAR@": groups.size ? ["    modbus_validation_copy_t validation_copy;"] : [],
         "@CHECKS@": checks, "@INITIALIZE@": init, "@SET_POINTER@": pointers,
         "@GROUP_FLAGS@": flags, "@GROUP_MEMBERS@": members, "@GROUP_VALIDATE@": validation,
         "@DEFAULT_CHECK@": withEnums ? [`            if ((entry->type == REG_TYPE_UINT16) &&
@@ -2648,7 +2980,7 @@ function generateParser(entries, groups) {
     };
     const atomic = PARSER_ATOMIC.split("\n").flatMap(line => blocks[line] ?? [line]).join("\n");
     return { "modbus_parser.h": PARSER_HEADER, "modbus_parser.c": PARSER_SOURCE
-            .replace("@ENUM_INCLUDE@\n", withEnums ? ENUM_INCLUDE + "\n" : "").replace("@ATOMIC@", () => atomic) };
+            .replace("@ENUM_INCLUDE@\n", withEnums ? ENUM_INTERNAL_INCLUDE + "\n" : "").replace("@ATOMIC@", () => atomic) };
 }
 function generateModbusFiles(validated) {
     const entries = generatorEntries(validated);
@@ -2662,7 +2994,9 @@ function generateModbusFiles(validated) {
     }
     const { enums } = validated.documentValue;
     const files = {
+        ...generateNvm(validated.documentValue, entries),
         ...generateEnums(enums, entries),
+        ...generateBitsetTypes(validated.documentValue.bitsetDefs),
         ...generateRegisterMap(validated.documentValue, entries),
         "modbus_reg_idx_slave.h": generateRegisterIndex(entries, validated.documentValue.config.slaveAddress),
         ...generateAccess(entries),
@@ -2670,16 +3004,331 @@ function generateModbusFiles(validated) {
         ...generateWriteGuards(entries, groups),
         ...generateParser(entries, groups)
     };
-    if (enums.length) {
-        // TI's strict ANSI mode requires a final newline. Preserve Python bytes for legacy-only exports.
-        for (const name of Object.keys(files)) {
-            if (!files[name].endsWith("\n"))
-                files[name] += "\n";
-        }
+    for (const name of Object.keys(files)) {
+        if (!files[name].endsWith("\n"))
+            files[name] += "\n";
     }
     return files;
 }
-const editorTabs = ["register", "enum"];
+const NVM_VALIDATION_SOURCE = String.raw `static uint8_t nvm_entry_is_valid(const reg_table_entry_t *entry)
+{
+    if (entry->nvm_offset == NVM_OFFSET_UNUSED) {
+        return 0u;
+    }
+    if (entry->ram_ptr == (void *)0) {
+        return 0u;
+    }
+    if (entry->size == 0u) {
+        return 0u;
+    }
+    if (entry->nvm_offset >= (uint16_t)NVM_TOTAL_SIZE) {
+        return 0u;
+    }
+    if (entry->size > (uint16_t)((uint16_t)NVM_TOTAL_SIZE - entry->nvm_offset)) {
+        return 0u;
+    }
+    return 1u;
+}
+
+static uint8_t validate_u16_data(const reg_table_entry_t *entry,
+                                                    const uint8_t *data)
+{
+    uint16_t i;
+    uint16_t value;
+    uint16_t min_value;
+    uint16_t max_value;
+
+    if ((entry->length == 0u) ||
+        (entry->size != (uint16_t)(entry->length * (uint16_t)sizeof(uint16_t))) ||
+        (entry->min_value == (const void *)0) ||
+        (entry->max_value == (const void *)0)) {
+        return 0u;
+    }
+
+    (void)memcpy(&min_value, entry->min_value, sizeof(min_value));
+    (void)memcpy(&max_value, entry->max_value, sizeof(max_value));
+
+    for (i = 0u; i < entry->length; i++) {
+        (void)memcpy(&value, &data[(uint16_t)(i * (uint16_t)sizeof(uint16_t))], sizeof(value));
+        if ((value < min_value) || (value > max_value)) {
+            return 0u;
+        }
+    }
+
+    return 1u;
+}
+
+static uint8_t validate_u32_data(const reg_table_entry_t *entry,
+                                                    const uint8_t *data)
+{
+    uint16_t i;
+    uint32_t value;
+    uint32_t min_value;
+    uint32_t max_value;
+
+    if ((entry->length == 0u) ||
+        (entry->size != (uint16_t)(entry->length * (uint16_t)sizeof(uint32_t))) ||
+        (entry->min_value == (const void *)0) ||
+        (entry->max_value == (const void *)0)) {
+        return 0u;
+    }
+
+    (void)memcpy(&min_value, entry->min_value, sizeof(min_value));
+    (void)memcpy(&max_value, entry->max_value, sizeof(max_value));
+
+    for (i = 0u; i < entry->length; i++) {
+        (void)memcpy(&value, &data[(uint16_t)(i * (uint16_t)sizeof(uint32_t))], sizeof(value));
+        if ((value < min_value) || (value > max_value)) {
+            return 0u;
+        }
+    }
+
+    return 1u;
+}
+
+static uint8_t validate_float_data(const reg_table_entry_t *entry,
+                                                      const uint8_t *data)
+{
+    uint16_t i;
+    float value;
+    float min_value;
+    float max_value;
+
+    if ((entry->length == 0u) ||
+        (entry->size != (uint16_t)(entry->length * (uint16_t)sizeof(float))) ||
+        (entry->min_value == (const void *)0) ||
+        (entry->max_value == (const void *)0)) {
+        return 0u;
+    }
+
+    (void)memcpy(&min_value, entry->min_value, sizeof(min_value));
+    (void)memcpy(&max_value, entry->max_value, sizeof(max_value));
+
+    for (i = 0u; i < entry->length; i++) {
+        (void)memcpy(&value, &data[(uint16_t)(i * (uint16_t)sizeof(float))], sizeof(value));
+        if (value != value) {
+            return 0u;
+        }
+        if ((value < min_value) || (value > max_value)) {
+            return 0u;
+        }
+    }
+
+    return 1u;
+}
+
+static uint8_t validate_string_data(const reg_table_entry_t *entry,
+                                                       const uint8_t *data)
+{
+    if ((entry->size == 0u) ||
+        (entry->length != entry->size)) {
+        return 0u;
+    }
+
+    return (modbus_string_field_is_valid((const char *)data,
+                                         entry->size) != 0)
+        ? 1u
+        : 0u;
+}
+
+static uint8_t nvm_data_is_valid(const reg_table_entry_t *entry,
+                                                    const uint8_t *data)
+{
+    if ((entry == (const reg_table_entry_t *)0) || (data == (const uint8_t *)0)) {
+        return 0u;
+    }
+
+    switch (entry->type) {
+    case REG_TYPE_UINT16:
+    case REG_TYPE_UINT16_ARRAY:
+        return validate_u16_data(entry, data);
+
+    case REG_TYPE_UINT32:
+    case REG_TYPE_UINT32_ARRAY:
+        return validate_u32_data(entry, data);
+
+    case REG_TYPE_FLOAT:
+    case REG_TYPE_FLOAT_ARRAY:
+        return validate_float_data(entry, data);
+
+    case REG_TYPE_STRING:
+        return validate_string_data(entry, data);
+
+    default:
+        break;
+    }
+
+    return 0u;
+}
+`;
+function generateNvm(project, entries) {
+    const groups = project.resetGroupDefs ?? [];
+    const header = `#ifndef MODBUS_REG_NVM_SLAVE_H
+#define MODBUS_REG_NVM_SLAVE_H
+
+#include <stdint.h>
+
+typedef enum {
+${groups.map(group => "    MODBUS_RESET_GROUP_" + group.id.toUpperCase() + ",").join("\n")}
+    MODBUS_RESET_GROUP_COUNT
+} modbus_reset_group_t;
+
+typedef enum {
+    MODBUS_RESET_OK = 0,
+    MODBUS_RESET_INVALID_GROUP
+} modbus_reset_result_t;
+
+typedef enum {
+    MODBUS_NVM_CAPTURE_UNCHANGED = 0,
+    MODBUS_NVM_CAPTURE_CAPTURED,
+    MODBUS_NVM_CAPTURE_INVALID_ARG,
+    MODBUS_NVM_CAPTURE_BUFFER_TOO_SMALL
+} modbus_nvm_capture_result_t;
+
+typedef enum {
+    MODBUS_NVM_RESTORE_OK = 0,
+    MODBUS_NVM_RESTORE_REPAIRED,
+    MODBUS_NVM_RESTORE_INVALID_ARG,
+    MODBUS_NVM_RESTORE_SIZE_MISMATCH
+} modbus_nvm_restore_result_t;
+
+/* Call these APIs in one execution context, outside compound RAM updates. */
+/* Boot preparation; does not request saving. */
+void modbus_reg_load_defaults(void);
+/* Successful INIT always requests saving, including unchanged/RAM-only values. */
+modbus_reset_result_t modbus_reg_reset_defaults(modbus_reset_group_t group);
+void modbus_reg_nvm_mark_dirty(void);
+/* Synchronous copy into caller-owned storage; consumes dirty only on success. */
+modbus_nvm_capture_result_t modbus_reg_nvm_capture_if_changed(
+    uint8_t *dst, uint16_t capacity);
+/* Exact-size image; invalid entries use their defaults and request saving. */
+modbus_nvm_restore_result_t modbus_reg_nvm_restore(
+    const uint8_t *src, uint16_t size);
+
+#endif /* MODBUS_REG_NVM_SLAVE_H */
+`;
+    const members = groups.map(group => entries.filter(entry => entry.resetGroups.includes(group.id)));
+    const declarations = members.map((items, i) => items.length ?
+        `static const uint16_t s_reset_group_${i}[] = {\n${items.map(entry => "    " + indexMacro(entry) + ",").join("\n")}\n};\n` : "").join("\n");
+    const cases = groups.map((group, i) => `    case MODBUS_RESET_GROUP_${group.id.toUpperCase()}:
+        indices = ${members[i].length ? "s_reset_group_" + i : "(const uint16_t *)0"};
+        count = ${members[i].length}U;
+        break;`).join("\n");
+    const withEnums = entries.some(entry => entry.definition);
+    const enumValidation = withEnums ? `
+        if ((valid != 0U) && (entry->type == REG_TYPE_UINT16) && (entry->length == 1U)) {
+            (void)memcpy(&raw, data, sizeof(raw));
+            valid = (uint8_t)modbus_reg_enum_wire_value_is_valid(i, raw);
+        }` : "";
+    const source = `#include "modbus_reg_nvm_slave.h"
+#include "modbus_reg_map_slave_internal.h"
+#include "modbus_reg_idx_slave.h"
+${withEnums ? ENUM_INTERNAL_INCLUDE + "\n" : ""}#include <string.h>
+
+static uint8_t s_nvm_dirty = 0U;
+
+${declarations}
+${NVM_VALIDATION_SOURCE}
+void modbus_reg_nvm_mark_dirty(void)
+{
+    s_nvm_dirty = 1U;
+}
+
+void modbus_reg_load_defaults(void)
+{
+    uint16_t i;
+    const reg_table_entry_t *entry;
+
+    for (i = 0U; i < g_reg_table_slave_size; ++i) {
+        entry = &g_reg_table_slave[i];
+        if ((entry->ram_ptr != (void *)0) && (entry->default_value != (const void *)0)) {
+            (void)memcpy(entry->ram_ptr, entry->default_value, entry->size);
+        }
+    }
+}
+
+modbus_reset_result_t modbus_reg_reset_defaults(modbus_reset_group_t group)
+{
+    const uint16_t *indices;
+    uint16_t count;
+    uint16_t i;
+    const reg_table_entry_t *entry;
+
+    switch (group) {
+${cases}
+    default:
+        return MODBUS_RESET_INVALID_GROUP;
+    }
+    for (i = 0U; i < count; ++i) {
+        entry = &g_reg_table_slave[indices[i]];
+        (void)memcpy(entry->ram_ptr, entry->default_value, entry->size);
+    }
+    modbus_reg_nvm_mark_dirty();
+    return MODBUS_RESET_OK;
+}
+
+modbus_nvm_capture_result_t modbus_reg_nvm_capture_if_changed(
+    uint8_t *dst, uint16_t capacity)
+{
+    uint16_t i;
+    const reg_table_entry_t *entry;
+
+    if (dst == (uint8_t *)0) {
+        return MODBUS_NVM_CAPTURE_INVALID_ARG;
+    }
+    if (capacity < (uint16_t)NVM_TOTAL_SIZE) {
+        return MODBUS_NVM_CAPTURE_BUFFER_TOO_SMALL;
+    }
+    if (s_nvm_dirty == 0U) {
+        return MODBUS_NVM_CAPTURE_UNCHANGED;
+    }
+    (void)memset(dst, 0xFF, (uint16_t)NVM_TOTAL_SIZE);
+    for (i = 0U; i < g_reg_table_slave_size; ++i) {
+        entry = &g_reg_table_slave[i];
+        if (nvm_entry_is_valid(entry) != 0U) {
+            (void)memcpy(&dst[entry->nvm_offset], entry->ram_ptr, entry->size);
+        }
+    }
+    s_nvm_dirty = 0U;
+    return MODBUS_NVM_CAPTURE_CAPTURED;
+}
+
+modbus_nvm_restore_result_t modbus_reg_nvm_restore(
+    const uint8_t *src, uint16_t size)
+{
+    uint16_t i;
+${withEnums ? "    uint16_t raw;\n" : ""}    uint8_t repaired = 0U;
+    uint8_t valid;
+    const reg_table_entry_t *entry;
+    const uint8_t *data;
+
+    if (src == (const uint8_t *)0) {
+        return MODBUS_NVM_RESTORE_INVALID_ARG;
+    }
+    if (size != (uint16_t)NVM_TOTAL_SIZE) {
+        return MODBUS_NVM_RESTORE_SIZE_MISMATCH;
+    }
+    for (i = 0U; i < g_reg_table_slave_size; ++i) {
+        entry = &g_reg_table_slave[i];
+        if (nvm_entry_is_valid(entry) == 0U) {
+            continue;
+        }
+        data = &src[entry->nvm_offset];
+        valid = nvm_data_is_valid(entry, data);${enumValidation}
+        if (valid != 0U) {
+            (void)memcpy(entry->ram_ptr, data, entry->size);
+        } else {
+            (void)memcpy(entry->ram_ptr, entry->default_value, entry->size);
+            repaired = 1U;
+        }
+    }
+    s_nvm_dirty = repaired;
+    return repaired != 0U ? MODBUS_NVM_RESTORE_REPAIRED : MODBUS_NVM_RESTORE_OK;
+}
+`;
+    return { "modbus_reg_nvm_slave.h": header, "modbus_reg_nvm_slave.c": source };
+}
+const editorTabs = ["register", "enum", "bitset"];
 function showEditorTab(active) {
     for (const name of editorTabs) {
         const tab = $(name + "-tab");
@@ -2699,11 +3348,11 @@ for (const name of editorTabs) {
                 next = "register";
                 break;
             case "End":
-                next = "enum";
+                next = "bitset";
                 break;
             case "ArrowLeft":
             case "ArrowRight":
-                next = name === "register" ? "enum" : "register";
+                next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? 2 : 1)) % editorTabs.length];
                 break;
             default: return;
         }
@@ -2841,6 +3490,7 @@ function renderEnumDetailMode() {
     document.querySelectorAll("[data-enum-detail]").forEach(label => {
         label.hidden = detailKind.value !== "enum";
     });
+    renderBitsetDetailMode();
 }
 function supportsEnum(row) {
     const length = unsigned(row.length) ?? unsigned(project.lengthDefs.find(entry => entry.name.trim() === row.length.trim())?.length ?? "");
@@ -2849,14 +3499,16 @@ function supportsEnum(row) {
 function openEnumDetail(row) {
     const selection = row.enumDomain;
     const eligible = supportsEnum(row);
-    $("enum-detail").hidden = !eligible && !selection;
+    $("enum-detail").hidden = !eligible && !selection && !supportsBitset(row) && !row.bitsetDomain;
     detailKind.options[1].disabled = !eligible;
-    detailKind.value = selection ? "enum" : "range";
+    detailKind.options[2].disabled = !supportsBitset(row);
+    detailKind.value = selection ? "enum" : row.bitsetDomain ? "bitset" : "range";
     detailEnum.replaceChildren(new Option("列挙型を選択", "", true, true), ...project.enums.map(definition => new Option(definition.label, definition.id)));
     if (selection && project.enums.some(definition => definition.id === selection.enumId))
         detailEnum.value = selection.enumId;
     renderEnumDetailMode();
     renderEnumDetailMembers(selection?.defaultMemberId);
+    openBitsetDetail(row);
 }
 function updateEnumSelection() {
     const row = project.registers[detailIndex];
@@ -2864,6 +3516,10 @@ function updateEnumSelection() {
         return;
     row.enumDomain = detailKind.value === "enum" ?
         { kind: "enum", enumId: detailEnum.value, defaultMemberId: detailDefault.value } : null;
+    if (detailKind.value === "bitset")
+        updateBitsetSelection();
+    else
+        row.bitsetDomain = null;
     recordEdit();
 }
 detailKind.addEventListener("change", () => {
@@ -2875,6 +3531,145 @@ detailEnum.addEventListener("change", () => {
     updateEnumSelection();
 });
 detailDefault.addEventListener("change", updateEnumSelection);
+const bitsetId = $("bitset-id", HTMLInputElement);
+const bitsetLabel = $("bitset-label", HTMLInputElement);
+const bitsetWidth = $("bitset-width", HTMLSelectElement);
+const bitsetRows = $("bitset-bits");
+let editedBitset = null;
+let bitsetFormBaseline = "";
+function readBitsetForm() {
+    return { index: editedBitset, id: bitsetId.value, label: bitsetLabel.value, width: bitsetWidth.value,
+        bits: Array.from(bitsetRows.querySelectorAll("tr"), row => {
+            const value = (key) => row.querySelector(`[data-bit="${key}"]`).value;
+            return { bit: value("bit"), id: value("id"), label: value("label") };
+        }) };
+}
+function pendingBitsetForm() {
+    const form = readBitsetForm();
+    return JSON.stringify(form) === bitsetFormBaseline ? null : form;
+}
+function appendBitsetBit(bit) {
+    bitsetRows.insertAdjacentHTML("beforeend", `<tr>
+    <td><input data-bit="bit" type="number" min="0" max="31" step="1" aria-label="ビット番号" required value="${escapeHtml(String(bit?.bit ?? ""))}"></td>
+    <td><input data-bit="id" aria-label="ビット識別名" required value="${escapeHtml(bit?.id ?? "")}"></td>
+    <td><input data-bit="label" aria-label="ビット表示名" required value="${escapeHtml(bit?.label ?? "")}"></td>
+    <td><code data-bit-mask></code></td><td><button type="button" data-remove-bit class="small danger">削除</button></td>
+  </tr>`);
+    renderBitMasks();
+}
+function renderBitMasks() {
+    const width = Number(bitsetWidth.value);
+    for (const row of bitsetRows.querySelectorAll("tr")) {
+        const bit = unsigned(row.querySelector('[data-bit="bit"]').value);
+        row.querySelector("[data-bit-mask]").textContent = bit !== null && bit < width ? bitsetHex(2 ** bit, width) : "—";
+    }
+}
+function editBitset(index, draft) {
+    const definition = index === null ? undefined : project.bitsetDefs[index];
+    editedBitset = index;
+    bitsetId.value = definition?.id ?? "";
+    bitsetLabel.value = definition?.label ?? "";
+    bitsetWidth.value = String(definition?.width ?? 16);
+    bitsetRows.replaceChildren();
+    if (definition)
+        definition.bits.forEach(appendBitsetBit);
+    else
+        appendBitsetBit();
+    bitsetFormBaseline = JSON.stringify(readBitsetForm());
+    if (draft) {
+        bitsetId.value = draft.id;
+        bitsetLabel.value = draft.label;
+        bitsetWidth.value = draft.width;
+        bitsetRows.replaceChildren();
+        draft.bits.forEach(appendBitsetBit);
+    }
+    $("bitset-status").textContent = "";
+    $("bitset-list").innerHTML = project.bitsetDefs.map((item, i) => `<li><button type="button" data-bitset-index="${i}" aria-pressed="${i === editedBitset}">${escapeHtml(item.label)} <code>${escapeHtml(item.id)} (${item.width} bit)</code></button></li>`).join("") || "<li>登録済みのビット定義はありません。</li>";
+    renderBitMasks();
+}
+$("bitset-list").addEventListener("click", ({ target }) => {
+    if (!(target instanceof HTMLElement))
+        return;
+    const button = target.closest("[data-bitset-index]");
+    if (!button)
+        return;
+    editBitset(Number(button.dataset.bitsetIndex));
+    refreshHtmlSaveState();
+});
+$("bitset-add").addEventListener("click", () => { editBitset(null); refreshHtmlSaveState(); bitsetId.focus(); });
+$("bitset-add-bit").addEventListener("click", () => { appendBitsetBit(); refreshHtmlSaveState(); });
+bitsetRows.addEventListener("click", ({ target }) => {
+    if (target instanceof HTMLButtonElement && target.hasAttribute("data-remove-bit")) {
+        target.closest("tr")?.remove();
+        refreshHtmlSaveState();
+    }
+});
+$("bitset-form").addEventListener("input", () => { renderBitMasks(); refreshHtmlSaveState(); });
+$("bitset-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const form = readBitsetForm();
+    const definition = { id: form.id.trim(), label: form.label.trim(), width: Number(form.width),
+        bits: form.bits.map(bit => ({ bit: unsigned(bit.bit) ?? -1, id: bit.id.trim(), label: bit.label.trim() })) };
+    const error = bitsetDefinitionError(definition) || (project.bitsetDefs.some((item, index) => index !== editedBitset && item.id === definition.id) ? "定義IDが重複しています。" : "");
+    $("bitset-status").classList.toggle("error", Boolean(error));
+    if (error) {
+        $("bitset-status").textContent = error;
+        return;
+    }
+    const index = editedBitset ?? project.bitsetDefs.length, previous = project.bitsetDefs[index];
+    if (previous && previous.id !== definition.id) {
+        for (const row of project.registers)
+            if (row.bitsetDomain?.bitsetId === previous.id)
+                row.bitsetDomain.bitsetId = definition.id;
+    }
+    project.bitsetDefs[index] = definition;
+    editBitset(index);
+    renderTable();
+    recordEdit();
+    $("bitset-status").textContent = "登録しました。";
+});
+const detailBitset = $("bitset-detail-type", HTMLSelectElement);
+const detailBitsetHex = $("bitset-detail-default", HTMLInputElement);
+function supportsBitset(row) {
+    const length = unsigned(row.length) ?? unsigned(project.lengthDefs.find(entry => entry.name.trim() === row.length.trim())?.length ?? "");
+    return (row.type === "uint16_t" || row.type === "uint32_t") && length === 1;
+}
+function renderBitsetDetailMode() {
+    document.querySelectorAll("[data-bitset-detail]").forEach(item => { item.hidden = detailKind.value !== "bitset"; });
+}
+function renderBitsetDefaultBits() {
+    const definition = project.bitsetDefs.find(item => item.id === detailBitset.value);
+    const raw = unsigned(detailBitsetHex.value);
+    $("bitset-detail-bits").innerHTML = definition?.bits.map(bit => `<label><input type="checkbox" data-default-bit="${bit.bit}"${raw !== null && Math.floor(raw / 2 ** bit.bit) % 2 === 1 ? " checked" : ""}> ${bit.bit}: ${escapeHtml(bit.label)}</label>`).join("") ?? "";
+}
+function openBitsetDetail(row) {
+    const width = row.type === "uint32_t" ? 32 : 16;
+    detailBitset.replaceChildren(new Option("ビット定義を選択", "", true, true), ...project.bitsetDefs.filter(item => item.width === width).map(item => new Option(item.label, item.id)));
+    if (row.bitsetDomain)
+        detailBitset.value = row.bitsetDomain.bitsetId;
+    detailBitsetHex.value = row.bitsetDomain ? row.default : bitsetHex(unsigned(row.default) ?? 0, width);
+    renderBitsetDefaultBits();
+}
+function updateBitsetSelection() {
+    const row = project.registers[detailIndex];
+    if (!row || detailKind.value !== "bitset")
+        return;
+    row.default = detailBitsetHex.value;
+    row.bitsetDomain = { kind: "bitset", bitsetId: detailBitset.value,
+        default: unsigned(detailBitsetHex.value) ?? row.bitsetDomain?.default ?? 0 };
+}
+detailBitset.addEventListener("change", () => { updateBitsetSelection(); renderBitsetDefaultBits(); recordEdit(); });
+detailBitsetHex.addEventListener("input", () => { updateBitsetSelection(); renderBitsetDefaultBits(); recordEdit(); });
+$("bitset-detail-bits").addEventListener("input", ({ target }) => {
+    if (!(target instanceof HTMLInputElement) || target.dataset.defaultBit === undefined)
+        return;
+    const bit = Number(target.dataset.defaultBit), raw = unsigned(detailBitsetHex.value) ?? 0, mask = 2 ** bit;
+    const wasOn = Math.floor(raw / mask) % 2 === 1;
+    const value = raw + (target.checked === wasOn ? 0 : target.checked ? mask : -mask);
+    detailBitsetHex.value = bitsetHex(value, project.registers[detailIndex].type === "uint32_t" ? 32 : 16);
+    updateBitsetSelection();
+    recordEdit();
+});
 const htmlTemplate = document.documentElement.cloneNode(true);
 const embeddedHtmlDraft = htmlTemplate.querySelector("#html-project-data");
 const saveHtmlButton = $("save-html", HTMLButtonElement);
@@ -2902,10 +3697,28 @@ function parseHtmlDraft(text) {
         !isList(lengthDefs) || !lengthDefs.every(row => textFields(row, ["name", "length"])) ||
         !isList(enums) || !isList(registers))
         throw Error(invalid);
+    const groups = value.project.resetGroupDefs ?? [];
+    if (!isList(groups) || !groups.every(group => textFields(group, ["id", "label"])))
+        throw Error(invalid);
+    value.project.resetGroupDefs = groups;
+    const bitsets = value.project.bitsetDefs ?? [];
+    if (!isList(bitsets))
+        throw Error(invalid);
+    bitsets.forEach(item => decodeBitset(item, invalid));
+    value.project.bitsetDefs = bitsets;
     enums.forEach(item => decodeEnum(item, invalid));
     for (const row of registers) {
         if (!textFields(row, TEXT_FIELDS) || !FLAGS.every(key => typeof row[key] === "boolean"))
             throw Error(invalid);
+        const memberships = row.resetGroups ?? [];
+        if (!isList(memberships) || !memberships.every(id => typeof id === "string"))
+            throw Error(invalid);
+        row.resetGroups = memberships;
+        const bitset = row.bitsetDomain ?? null;
+        if (bitset !== null && (!isObject(bitset) || bitset.kind !== "bitset" ||
+            typeof bitset.bitsetId !== "string" || typeof bitset.default !== "number"))
+            throw Error(invalid);
+        row.bitsetDomain = bitset;
         const domain = row.enumDomain;
         if (domain !== null && (!textFields(domain, ["enumId", "defaultMemberId"]) || domain.kind !== "enum")) {
             throw Error(invalid);
@@ -2918,10 +3731,17 @@ function parseHtmlDraft(text) {
         !isList(form.members) || !form.members.every(member => textFields(member, ["id", "value", "label"])))) {
         throw Error(invalid);
     }
+    const bitsetForm = value.bitsetForm ?? null;
+    if (bitsetForm !== null && (!textFields(bitsetForm, ["id", "label", "width"]) ||
+        (bitsetForm.index !== null && (typeof bitsetForm.index !== "number" || !Number.isInteger(bitsetForm.index) ||
+            bitsetForm.index < 0 || bitsetForm.index >= bitsets.length)) ||
+        !isList(bitsetForm.bits) || !bitsetForm.bits.every(bit => textFields(bit, ["bit", "id", "label"]))))
+        throw Error(invalid);
+    value.bitsetForm = bitsetForm;
     return value;
 }
 function currentHtmlDraft() {
-    const draft = { version: 1, sourceName, project, enumForm: pendingEnumForm() };
+    const draft = { version: 1, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm() };
     return JSON.stringify(draft);
 }
 function confirmLeavingHtml(event) {
@@ -3090,8 +3910,8 @@ function finishProjectReplacement(proceed) {
     }
 }
 function applyHtmlDraft(draft) {
-    replaceProject(draft.project, draft.sourceName, draft.enumForm);
-    showEditorTab(draft.enumForm ? "enum" : "register");
+    replaceProject(draft.project, draft.sourceName, draft.enumForm, draft.bitsetForm);
+    showEditorTab(draft.bitsetForm ? "bitset" : draft.enumForm ? "enum" : "register");
 }
 function initializeHtmlSave() {
     let draft = null;
@@ -3221,6 +4041,7 @@ const detailDialog = $("detail-dialog", HTMLDialogElement);
 const codeDialog = $("code-dialog", HTMLDialogElement);
 const codeSelection = $("code-selection", HTMLSelectElement);
 const lengthDialog = $("length-dialog", HTMLDialogElement);
+const resetGroupDialog = $("reset-group-dialog", HTMLDialogElement);
 const issueDialog = $("issue-dialog", HTMLDialogElement);
 let project = sampleProject();
 let sourceName = "サンプル";
@@ -3271,11 +4092,11 @@ function registerMarkup(row, index) {
     const input = (key, disabled = false, placeholder = "未入力") => `<td><input ${attrs(key)} value="${disabled ? UNUSED : escapeHtml(row[key])}" placeholder="${escapeHtml(placeholder)}"${disabled ? " disabled" : ""}></td>`;
     const type = `<td><select ${attrs("type")}>${optionList(TYPES, row.type, { reserved: "予約領域" })}</select></td>`;
     const access = reserved ? input("access", true) :
-        `<td><select ${attrs("access")}>${optionList(ACCESS, row.access)}</select></td>`;
+        `<td><select ${attrs("access")}>${optionList(ACCESS, row.access, { RO: "R", WO: "W" })}</select></td>`;
     const selection = row.enumDomain;
     const definition = selection && project.enums.find(item => item.id === selection.enumId);
     const member = definition && definition.members.find(item => item.id === selection?.defaultMemberId);
-    const valueCells = selection ? `<td colspan="2" class="enum-cell">
+    const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell"><span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}</td><td class="enum-cell bitset-cell">${Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力"}</td>` : selection ? `<td colspan="2" class="enum-cell">
     <span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}
     </td><td class="enum-cell">${member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択"}</td>` :
         input("min", reserved || string) + input("max", reserved || string) + input("default", reserved);
@@ -3306,7 +4127,12 @@ function renderLengths() {
       <td><input data-field="length" aria-label="配列長 ${index + 1} 行目" value="${escapeHtml(row.length)}"></td>
       <td><button type="button" class="small danger" data-delete-length>削除</button></td></tr>`).join("");
 }
-function replaceProject(next, name, enumForm = null) {
+function renderResetGroups() {
+    $("reset-group-body").innerHTML = project.resetGroupDefs.map((group, index) => `<tr data-index="${index}"><td><input data-field="id" aria-label="グループID ${index + 1}" value="${escapeHtml(group.id)}"></td>
+      <td><input data-field="label" aria-label="表示名 ${index + 1}" value="${escapeHtml(group.label)}"></td>
+      <td><button type="button" class="small danger" data-delete-reset-group>削除</button></td></tr>`).join("");
+}
+function replaceProject(next, name, enumForm = null, bitsetForm = null) {
     project = next;
     sourceName = name;
     configInputs.slaveAddress.value = project.config.slaveAddress;
@@ -3315,8 +4141,10 @@ function replaceProject(next, name, enumForm = null) {
     typeFilter.value = "";
     renderSource();
     renderLengths();
+    renderResetGroups();
     const enumIndex = enumForm ? enumForm.index : next.enums.length ? 0 : null;
     editEnum(enumIndex, enumForm ?? undefined);
+    editBitset(bitsetForm ? bitsetForm.index : next.bitsetDefs.length ? 0 : null, bitsetForm ?? undefined);
     renderTable();
 }
 function showIssues() {
@@ -3334,6 +4162,11 @@ function validatedForExport() {
     showIssues();
     return null;
 }
+function renderResetMemberships(row) {
+    $("detail-reset-memberships").innerHTML = project.resetGroupDefs.length ?
+        project.resetGroupDefs.map(group => `<label><input type="checkbox" data-reset-group="${escapeHtml(group.id)}"${row.resetGroups.includes(group.id) ? " checked" : ""}${row.type === "reserved" ? " disabled" : ""}> ${escapeHtml(group.label)}</label>`).join("") :
+        "<p>部分初期化グループを登録すると選択できます。</p>";
+}
 function openDetail(index) {
     const row = project.registers[index];
     if (!row)
@@ -3348,6 +4181,7 @@ function openDetail(index) {
         control.value = control.disabled ? UNUSED : String(row[key]);
     }
     openEnumDetail(row);
+    renderResetMemberships(row);
     detailDialog.showModal();
 }
 function showCode() {
@@ -3445,10 +4279,12 @@ $("register-body").addEventListener("input", event => {
         return;
     const field = target.dataset.field;
     const index = rowIndex(target);
-    if (!isOneOf(TABLE_FIELDS, field) || index === null)
+    if (index === null)
         return;
     const row = project.registers[index];
     if (!row)
+        return;
+    if (!isOneOf(TABLE_FIELDS, field))
         return;
     const previousType = row.type;
     row[field] = target.value;
@@ -3477,6 +4313,14 @@ $("detail-body").addEventListener("input", event => {
     const row = project.registers[detailIndex];
     if (!row)
         return;
+    if (target instanceof HTMLInputElement && target.dataset.resetGroup !== undefined) {
+        if (row.type === "reserved")
+            return;
+        const id = target.dataset.resetGroup;
+        row.resetGroups = target.checked ? [...new Set([...row.resetGroups, id])] : row.resetGroups.filter(value => value !== id);
+        recordEdit();
+        return;
+    }
     const key = target.dataset.detail;
     if (isOneOf(FLAGS, key))
         row[key] = target.value === "true";
@@ -3523,6 +4367,49 @@ $("length-body").addEventListener("click", event => {
         return;
     project.lengthDefs.splice(index, 1);
     renderLengths();
+    recordEdit();
+});
+$("open-reset-groups").addEventListener("click", () => resetGroupDialog.showModal());
+$("add-reset-group").addEventListener("click", () => {
+    project.resetGroupDefs.push({ id: "", label: "" });
+    renderResetGroups();
+    recordEdit();
+});
+$("reset-group-body").addEventListener("input", event => {
+    const { target } = event;
+    if (!(target instanceof HTMLInputElement))
+        return;
+    const index = rowIndex(target);
+    const field = target.dataset.field;
+    if (index === null || (field !== "id" && field !== "label"))
+        return;
+    const group = project.resetGroupDefs[index];
+    if (!group)
+        return;
+    const previous = group.id;
+    group[field] = target.value;
+    if (field === "id" && previous) {
+        for (const row of project.registers)
+            row.resetGroups = row.resetGroups.map(id => id === previous ? target.value : id);
+    }
+    renderTable();
+    recordEdit();
+});
+$("reset-group-body").addEventListener("click", event => {
+    const { target } = event;
+    if (!(target instanceof HTMLButtonElement) || !Object.hasOwn(target.dataset, "deleteResetGroup"))
+        return;
+    const index = rowIndex(target);
+    if (index === null)
+        return;
+    const group = project.resetGroupDefs[index];
+    if (project.registers.some(row => row.resetGroups.includes(group.id))) {
+        message("所属レジスタのチェックを外してからグループを削除してください。", true);
+        return;
+    }
+    project.resetGroupDefs.splice(index, 1);
+    renderResetGroups();
+    renderTable();
     recordEdit();
 });
 document.querySelectorAll("[data-close]").forEach(button => {

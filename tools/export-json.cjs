@@ -1,0 +1,13 @@
+"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const core = require("./editor-core.cjs");
+const [input, output] = process.argv.slice(2);
+if (!input || !output) throw Error("Usage: node tools/export-json.cjs input.json output-directory");
+const {project} = core.decodeProject(JSON.parse(fs.readFileSync(input, "utf8").replace(/^\ufeff/, "")));
+const result = core.inspectProject(project);
+if (!result.validated) throw Error(JSON.stringify(result.errors, null, 2));
+const files = core.generateModbusFiles(result.validated);
+fs.mkdirSync(output, {recursive: true});
+for (const [name, text] of Object.entries(files)) fs.writeFileSync(path.join(output, name), text, "utf8");
+process.stdout.write(JSON.stringify({registers: project.registers.length, files: Object.keys(files)}, null, 2) + "\n");

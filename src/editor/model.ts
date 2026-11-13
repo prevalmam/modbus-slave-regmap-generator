@@ -1,7 +1,7 @@
 "use strict";
 
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"] as const;
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"] as const;
@@ -22,14 +22,24 @@ type RegisterFlags = Record<typeof FLAGS[number], boolean>;
 type RegisterNotes = Record<typeof NOTES[number], string>;
 type EnumMember = {id: string; value: number; label: string};
 type RegisterEnum = {id: string; label: string; members: EnumMember[]};
+type RegisterBit = {bit: number; id: string; label: string};
+type BitsetDefinition = {id: string; label: string; width: 16 | 32; bits: RegisterBit[]};
+type BitsetDomain = {kind: "bitset"; bitsetId: string; default: number};
+type ResetGroupDefinition = {id: string; label: string};
 type EnumDomain = {kind: "enum"; enumId: string; defaultMemberId: string};
-type ValueDomain = EnumDomain | {kind: "range"; min: number; max: number; default: number} |
+type ValueDomain = EnumDomain | BitsetDomain | {kind: "range"; min: number; max: number; default: number} |
   {kind: "string"; default: string} | {kind: "reserved"};
-type DraftRegister = RegisterFlags & Record<typeof TEXT_FIELDS[number], string> & {enumDomain: EnumDomain | null};
+type DraftRegister = RegisterFlags & Record<typeof TEXT_FIELDS[number], string> & {
+  enumDomain: EnumDomain | null;
+  bitsetDomain: BitsetDomain | null;
+  resetGroups: string[];
+};
 type DraftProject = {
   config: {slaveAddress: string; nvmSize: string};
   lengthDefs: {name: string; length: string}[];
   enums: RegisterEnum[];
+  bitsetDefs: BitsetDefinition[];
+  resetGroupDefs: ResetGroupDefinition[];
   registers: DraftRegister[];
 };
 type RegisterDefinition = RegisterFlags & RegisterNotes & {
@@ -41,6 +51,7 @@ type RegisterDefinition = RegisterFlags & RegisterNotes & {
   valueDomain: ValueDomain;
   nvmOffset: number | Unused;
   groupValidate: string;
+  resetGroups: string[];
 };
 type RegmapDocument = {
   format: typeof FORMAT;
@@ -48,6 +59,8 @@ type RegmapDocument = {
   config: {slaveAddress: number; nvmSize: number};
   lengthDefs: {name: string; length: number}[];
   enums: RegisterEnum[];
+  bitsetDefs: BitsetDefinition[];
+  resetGroupDefs: ResetGroupDefinition[];
   registers: RegisterDefinition[];
 };
 type ValidatedProject = {documentValue: RegmapDocument; counts: number[]};
@@ -61,6 +74,15 @@ type Inspection = {
 type MemoryRange = {start: number; end: number; index: number; label: string};
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ENUM_ID = /^[a-z][a-z0-9_]*$/;
+const NVM_API_SYMBOLS = new Set([
+  "modbus_reset_group_t", "modbus_reset_result_t", "modbus_nvm_capture_result_t",
+  "modbus_nvm_restore_result_t", "modbus_reg_load_defaults", "modbus_reg_reset_defaults",
+  "modbus_reg_nvm_mark_dirty", "modbus_reg_nvm_capture_if_changed", "modbus_reg_nvm_restore",
+  "MODBUS_REG_NVM_SLAVE_H", "MODBUS_RESET_GROUP_COUNT", "MODBUS_RESET_OK", "MODBUS_RESET_INVALID_GROUP",
+  "MODBUS_NVM_CAPTURE_UNCHANGED", "MODBUS_NVM_CAPTURE_CAPTURED", "MODBUS_NVM_CAPTURE_INVALID_ARG",
+  "MODBUS_NVM_CAPTURE_BUFFER_TOO_SMALL", "MODBUS_NVM_RESTORE_OK", "MODBUS_NVM_RESTORE_REPAIRED",
+  "MODBUS_NVM_RESTORE_INVALID_ARG", "MODBUS_NVM_RESTORE_SIZE_MISMATCH"
+]);
 const C_KEYWORDS = new Set(
   "auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while".split(" ")
 );
@@ -100,8 +122,15 @@ function draftRow(data: Record<string, unknown> = {}): DraftRegister {
     address: "0", name: "", type: "uint16_t", length: "1",
     access: "RW", min: "0", max: "65535", default: "0", nvmOffset: "",
     updateNotify: false, busyReject: false, writeCheck: false, groupValidate: UNUSED,
-    unit: UNUSED, summary: UNUSED, description: UNUSED, spec: UNUSED, notes: UNUSED, enumDomain: null
+    unit: UNUSED, summary: UNUSED, description: UNUSED, spec: UNUSED, notes: UNUSED,
+    enumDomain: null, bitsetDomain: null, resetGroups: []
   };
+  if (Object.hasOwn(data, "resetGroups")) {
+    if (!isList(data.resetGroups) || !data.resetGroups.every(id => typeof id === "string")) {
+      throw Error("resetGroups はグループIDの配列で指定してください。");
+    }
+    row.resetGroups = [...data.resetGroups] as string[];
+  }
   for (const key of FLAGS) {
     if (!Object.hasOwn(data, key)) continue;
     const value = data[key];
@@ -120,6 +149,8 @@ function draftRow(data: Record<string, unknown> = {}): DraftRegister {
 function sampleProject(): DraftProject {
   return {
     config: {slaveAddress: "1", nvmSize: "256"},
+    bitsetDefs: [],
+    resetGroupDefs: [{id: "settings", label: "設定の初期化"}],
     lengthDefs: [{name: "NAME_LEN", length: "12"}],
     enums: [{
       id: "modbus_parity", label: "Modbusパリティ", members: [
@@ -146,9 +177,9 @@ function sampleProject(): DraftProject {
         updateNotify: true, writeCheck: true, summary: "運転状態の書き込み判定例"}),
         enumDomain: {kind: "enum", enumId: "modbus_operation_status", defaultMemberId: "init"}},
       draftRow({address: 106, name: "ModbusBaudrate", max: 2, default: 1, nvmOffset: "0x000C",
-        updateNotify: true, groupValidate: "serial_settings", summary: "通信速度の設定例"}),
+        updateNotify: true, groupValidate: "serial_settings", summary: "通信速度の設定例", resetGroups: ["settings"]}),
       {...draftRow({address: 107, name: "ModbusParityBit", max: 2, nvmOffset: "0x000E",
-        updateNotify: true, groupValidate: "serial_settings", summary: "パリティの設定例"}),
+        updateNotify: true, groupValidate: "serial_settings", summary: "パリティの設定例", resetGroups: ["settings"]}),
         enumDomain: {kind: "enum", enumId: "modbus_parity", defaultMemberId: "none"}},
       draftRow({address: 108, name: "reserved_108", type: "reserved", length: 2,
         access: UNUSED, min: UNUSED, max: UNUSED, default: UNUSED, nvmOffset: UNUSED})
@@ -199,6 +230,38 @@ function decodeEnum(value: unknown, invalid: string): RegisterEnum {
   })};
 }
 
+function bitsetDefinitionError(definition: BitsetDefinition): string {
+  if (!ENUM_ID.test(definition.id) || !definition.label.trim()) return "型IDと表示名を入力してください。";
+  if (definition.width !== 16 && definition.width !== 32) return "幅は16または32にしてください。";
+  if (!definition.bits.length || definition.bits.length > definition.width) return "ビット定義は1件以上、幅以下にしてください。";
+  const ids = new Set<string>(), positions = new Set<number>();
+  for (const bit of definition.bits) {
+    if (!ENUM_ID.test(bit.id) || !isName(bit.id) || !bit.label.trim() || !Number.isInteger(bit.bit) ||
+        bit.bit < 0 || bit.bit >= definition.width) return "ビット番号・識別名・表示名を確認してください。";
+    if (ids.has(bit.id) || positions.has(bit.bit)) return "ビット番号と識別名の重複を確認してください。";
+    ids.add(bit.id); positions.add(bit.bit);
+  }
+  return "";
+}
+
+function bitMaskName(definition: BitsetDefinition, bit: RegisterBit) {
+  return (definition.id + "_" + bit.id + "_MASK").toUpperCase();
+}
+
+function bitsetHex(value: number, width: number) {
+  return "0x" + value.toString(16).toUpperCase().padStart(width / 4, "0");
+}
+
+function decodeBitset(value: unknown, invalid: string): BitsetDefinition {
+  if (!isObject(value) || typeof value.id !== "string" || typeof value.label !== "string" ||
+      (value.width !== 16 && value.width !== 32) || !isList(value.bits)) throw Error(invalid);
+  return {id: value.id, label: value.label, width: value.width, bits: value.bits.map(bit => {
+    if (!isObject(bit) || typeof bit.bit !== "number" || typeof bit.id !== "string" ||
+        typeof bit.label !== "string") throw Error(invalid);
+    return {bit: bit.bit, id: bit.id, label: bit.label};
+  })};
+}
+
 function importTableRow(row: unknown): DraftRegister {
   if (!isObject(row) || !Object.hasOwn(row, "Reg_Addr") || !Object.hasOwn(row, "VarName")) {
     throw Error("RegisterTableのレジスタ行を読み取れません。");
@@ -228,14 +291,15 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   const {source, rows} = documentValue;
   if (isObject(source) && source.sheet === "RegisterTable" && isList(rows)) {
     return {
-      project: {config: {slaveAddress: "", nvmSize: ""}, lengthDefs: [], enums: [],
+      project: {config: {slaveAddress: "", nvmSize: ""}, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
         registers: rows.map(importTableRow)},
       hint: "レジスタ表を読み込みました。スレーブアドレスとNVMサイズを入力してください。"
     };
   }
-  const {format, schemaVersion, config, lengthDefs, registers, enums} = documentValue;
+  const {format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs} = documentValue;
   const legacy = schemaVersion === 1;
-  const hasDomains = schemaVersion === SCHEMA_VERSION;
+  const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
+  const hasResetGroups = schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
   const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
   const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
     (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
@@ -246,19 +310,34 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   }
 
   if (hasDomains && !isList(enums)) throw Error(invalid);
+  if (schemaVersion === SCHEMA_VERSION && !isList(bitsetDefs)) throw Error(invalid);
+  if (hasResetGroups && (!isList(resetGroupDefs) ||
+      !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
+    throw Error(invalid);
+  }
   const definitions = hasDomains && isList(enums) ? enums.map(value => decodeEnum(value, invalid)) : [];
   const project: DraftProject = {
     config: {slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize)},
     enums: definitions,
+    bitsetDefs: schemaVersion === SCHEMA_VERSION && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
+    resetGroupDefs: hasResetGroups ?
+      (resetGroupDefs as ResetGroupDefinition[]).map(group => ({...group})) : [],
     lengthDefs: lengthDefs.map(row => {
       if (!isObject(row) || typeof row.name !== "string" || !isScalar(row.length)) throw Error(invalid);
       return {name: row.name, length: scalarText(row.length)};
     }),
     registers: registers.map(row => {
       if (!isObject(row) || !fields.every(key => Object.hasOwn(row, key))) throw Error(invalid);
+      if (hasResetGroups && (!isList(row.resetGroups) ||
+          !row.resetGroups.every(id => typeof id === "string"))) throw Error(invalid);
       if (hasDomains) {
         const domain = row.valueDomain;
         if (!isObject(domain)) throw Error(invalid);
+        if (schemaVersion === SCHEMA_VERSION && domain.kind === "bitset" &&
+            typeof domain.bitsetId === "string" && typeof domain.default === "number") {
+          return {...draftRow({...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default}),
+            bitsetDomain: {kind: "bitset", bitsetId: domain.bitsetId, default: domain.default}};
+        }
         if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
           const definition = definitions.find(item => item.id === domain.enumId);
           const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
@@ -299,9 +378,20 @@ function inspectProject(project: DraftProject): Inspection {
 
   const lengths = new Map<string, number | null>();
   const lengthDefs: RegmapDocument["lengthDefs"] = [];
+  const busyCallbackSymbols = new Set(project.registers.filter(row => row.busyReject && row.type !== "reserved")
+    .map(row => "modbus_user_is_busy_" + row.name.trim()));
+  const resetGroupDefs = (project.resetGroupDefs ?? []).map(group => ({id: group.id.trim(), label: group.label.trim()}));
+  const resetIds = new Set<string>();
+  for (const group of resetGroupDefs) {
+    if (!ENUM_ID.test(group.id) || !group.label) issue("初期化グループのIDと表示名を確認してください。");
+    if (group.id === "count" || resetIds.has(group.id)) issue("初期化グループIDが重複または予約名です: " + group.id);
+    resetIds.add(group.id);
+  }
   project.lengthDefs.forEach((entry, index) => {
     const name = entry.name.trim();
+    if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_")) issue("配列長定義が生成APIの予約名です: " + name);
     const length = unsigned(entry.length);
+    if (name === "NVM_MAX_ENTRY_SIZE_BYTES") issue("配列長定義 " + name + " は生成器の予約名です。");
     if (!isName(name)) issue("配列長定義 " + (index + 1) + " 行目の名前が無効です。");
     else if (lengths.has(name)) issue("配列長定義 " + name + " が重複しています。");
     if (length === null || length < 1 || length > 65536) {
@@ -313,9 +403,12 @@ function inspectProject(project: DraftProject): Inspection {
 
   const enumsById = new Map<string, RegisterEnum>();
   const enumSymbols = new Set<string>([
+    ...NVM_API_SYMBOLS, ...busyCallbackSymbols, ...resetGroupDefs.map(group => "MODBUS_RESET_GROUP_" + group.id.toUpperCase()),
     "reg_type_t", "access_mode_t", "reg_table_entry_t", "modbus_write_result_t", "modbus_reg_snapshot_t",
     "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
-    "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+    "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
+    "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+    "NVM_MAX_ENTRY_SIZE_BYTES",
     ...lengths.keys(), ...project.registers.map(row => row.name.trim())
   ]);
   for (const definition of project.enums) {
@@ -332,6 +425,38 @@ function inspectProject(project: DraftProject): Inspection {
     }
   }
 
+  const bitsetsById = new Map<string, BitsetDefinition>();
+  if ((project.bitsetDefs ?? []).length) {
+    for (const symbol of ["modbus_bit_state_t", "MODBUS_BIT_OFF", "MODBUS_BIT_ON", "MODBUS_REG_BITS_SLAVE_H"]) {
+      if (enumSymbols.has(symbol)) issue("ビットAPIのC識別子が重複しています: " + symbol);
+      enumSymbols.add(symbol);
+    }
+  }
+  for (const definition of project.bitsetDefs ?? []) {
+    const error = bitsetDefinitionError(definition);
+    if (error) issue("ビット定義 " + definition.id + "　" + error);
+    if (bitsetsById.has(definition.id)) issue("ビット定義IDが重複しています: " + definition.id);
+    bitsetsById.set(definition.id, definition);
+    for (const symbol of [definition.id + "_bits_t", ...definition.bits.map(bit => bitMaskName(definition, bit))]) {
+      if (enumSymbols.has(symbol) || symbol.startsWith("MODBUS_IDX_")) issue("生成するC識別子が重複しています: " + symbol);
+      enumSymbols.add(symbol);
+    }
+  }
+  const bitApiSymbols = new Set(enumSymbols);
+  for (const row of project.registers) {
+    for (const symbol of ["get_" + row.name, "set_" + row.name, "get_" + row.name + "_default",
+      "set_" + row.name + "_masked"]) bitApiSymbols.add(symbol);
+  }
+  for (const row of project.registers) {
+    const definition = row.bitsetDomain && bitsetsById.get(row.bitsetDomain.bitsetId);
+    if (!definition) continue;
+    for (const symbol of ["get_" + row.name + "_bits", "set_" + row.name + "_bits", "clear_" + row.name + "_all",
+      ...definition.bits.flatMap(bit => ["get_" + row.name + "_" + bit.id, "set_" + row.name + "_" + bit.id])]) {
+      if (bitApiSymbols.has(symbol)) issue("ビットAPIのC識別子が重複しています: " + symbol);
+      bitApiSymbols.add(symbol);
+    }
+  }
+
   const names = new Set<string>();
   const enumGroups = new Set<string>();
   const addressRanges: MemoryRange[] = [], nvmRanges: MemoryRange[] = [];
@@ -341,10 +466,17 @@ function inspectProject(project: DraftProject): Inspection {
   project.registers.forEach((row, index) => {
     const errorCount = errors.length;
     const name = row.name.trim();
+    if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_")) issue("変数名が生成APIの予約名です: " + name, index, "name");
+    if (name === "NVM_MAX_ENTRY_SIZE_BYTES") issue("変数名 " + name + " は生成器の予約名です。", index, "name");
     const label = (index + 1) + " 行目" + (name ? " " + name : "");
     const fail = (field: string, message: string) => issue(label + "　" + message, index, field);
     const type = isOneOf(TYPES, row.type) ? row.type : null;
     const reserved = type === "reserved", string = type === "string";
+    const resetGroups = row.resetGroups ?? [];
+    if (new Set(resetGroups).size !== resetGroups.length || resetGroups.some(id => !resetIds.has(id))) {
+      fail("resetGroups", "初期化グループの未定義参照または重複があります。");
+    }
+    if (reserved && resetGroups.length) fail("resetGroups", "予約領域は初期化グループへ所属できません。");
     if (type === null) fail("type", "型を選んでください。");
     if (!isName(name)) fail("name", "変数名に有効なC識別子を入力してください。");
     else if (!reserved && names.has(name)) fail("name", "変数名が重複しています。");
@@ -368,11 +500,19 @@ function inspectProject(project: DraftProject): Inspection {
     const access = reserved ? UNUSED : isOneOf(ACCESS, row.access) ? row.access : null;
     if (access === null) fail("access", "アクセス権限を選んでください。");
     if (!reserved && access === "RO" && (row.busyReject || row.writeCheck)) {
-      fail("detail", "ROの行ではBUSY拒否と書き込み判定を解除してください。");
+      fail("detail", "Rの行ではBUSY拒否と書き込み判定を解除してください。");
     }
     const groupValidate = reserved ? UNUSED : row.groupValidate.trim();
     if (groupValidate !== UNUSED && !isName(groupValidate)) {
       fail("detail", "グループ検証名を指定してください。使わない場合は - を入力します。");
+    }
+    if (groupValidate !== UNUSED && isName(groupValidate)) {
+      const group = groupValidate.toLowerCase();
+      const symbol = groupAfterType(group);
+      if (!enumGroups.has(group) && enumSymbols.has(symbol)) {
+        fail("detail", "生成するC識別子 " + symbol + " が重複しています。");
+      }
+      enumGroups.add(group);
     }
     for (const key of NOTES) {
       if (row[key].trim() === "") {
@@ -382,20 +522,24 @@ function inspectProject(project: DraftProject): Inspection {
     }
 
     let valueDomain: ValueDomain | null = null;
-    if (row.enumDomain) {
+    if (row.enumDomain && row.bitsetDomain) fail("detail", "値の種類は1つだけ指定してください。");
+    if (row.bitsetDomain) {
+      const definition = bitsetsById.get(row.bitsetDomain.bitsetId);
+      if ((type !== "uint16_t" && type !== "uint32_t") || length !== 1) fail("detail", "ビット定義は配列長1の符号なし整数で指定してください。");
+      if (!definition) fail("detail", "ビット定義を選択してください。");
+      else if ((type === "uint16_t" ? 16 : 32) !== definition.width) fail("detail", "ビット定義の幅とレジスタ型を揃えてください。");
+      const initial = row.bitsetDomain.default;
+      if (numeric(row.default, type === "uint32_t" ? "uint32_t" : "uint16_t") === null ||
+          !Number.isSafeInteger(initial) || initial < 0 || initial > (type === "uint32_t" ? 4294967295 : 65535)) {
+        fail("default", "ビット初期値が型の範囲外です。");
+      }
+      valueDomain = {...row.bitsetDomain};
+    } else if (row.enumDomain) {
       const definition = enumsById.get(row.enumDomain.enumId);
       if (type !== "uint16_t" || length !== 1) fail("detail", "列挙型は配列長1のuint16_tで指定してください。");
       if (!definition) fail("detail", "列挙型を選択してください。");
       else if (!definition.members.some(member => member.id === row.enumDomain?.defaultMemberId)) {
         fail("detail", "列挙型の初期値を選択してください。");
-      }
-      if (groupValidate !== UNUSED && isName(groupValidate)) {
-        const group = groupValidate.toLowerCase();
-        const symbol = groupAfterType(group);
-        if (!enumGroups.has(group) && enumSymbols.has(symbol)) {
-          fail("detail", "生成するC識別子 " + symbol + " が重複しています。");
-        }
-        enumGroups.add(group);
       }
       valueDomain = {...row.enumDomain};
     } else if (string) {
@@ -447,7 +591,7 @@ function inspectProject(project: DraftProject): Inspection {
     registers.push({
       address, name, type, length: literalLength ?? row.length.trim(), access, valueDomain, nvmOffset,
       updateNotify: !reserved && row.updateNotify, busyReject: !reserved && row.busyReject,
-      writeCheck: !reserved && row.writeCheck, groupValidate,
+      writeCheck: !reserved && row.writeCheck, groupValidate, resetGroups: [...resetGroups],
       unit: row.unit, summary: row.summary, description: row.description, spec: row.spec, notes: row.notes
     });
     registerCounts.push(registerCount);
@@ -478,7 +622,8 @@ function inspectProject(project: DraftProject): Inspection {
     return {errors, warnings, counts, validated: null};
   }
   const documentValue: RegmapDocument = {
-    format: FORMAT, schemaVersion: SCHEMA_VERSION, config: {slaveAddress, nvmSize}, lengthDefs, enums: project.enums, registers
+    format: FORMAT, schemaVersion: SCHEMA_VERSION, config: {slaveAddress, nvmSize},
+    lengthDefs, enums: project.enums, bitsetDefs: project.bitsetDefs ?? [], resetGroupDefs, registers
   };
   return {errors, warnings, counts, validated: {documentValue, counts: registerCounts}};
 }

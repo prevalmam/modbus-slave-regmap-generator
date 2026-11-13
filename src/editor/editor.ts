@@ -95,6 +95,7 @@ const detailDialog = $("detail-dialog", HTMLDialogElement);
 const codeDialog = $("code-dialog", HTMLDialogElement);
 const codeSelection = $("code-selection", HTMLSelectElement);
 const lengthDialog = $("length-dialog", HTMLDialogElement);
+const resetGroupDialog = $("reset-group-dialog", HTMLDialogElement);
 const issueDialog = $("issue-dialog", HTMLDialogElement);
 
 let project = sampleProject();
@@ -152,11 +153,11 @@ function registerMarkup(row: DraftRegister, index: number) {
   const input = (key: TableField, disabled = false, placeholder = "未入力") => `<td><input ${attrs(key)} value="${disabled ? UNUSED : escapeHtml(row[key])}" placeholder="${escapeHtml(placeholder)}"${disabled ? " disabled" : ""}></td>`;
   const type = `<td><select ${attrs("type")}>${optionList(TYPES, row.type, {reserved: "予約領域"})}</select></td>`;
   const access = reserved ? input("access", true) :
-    `<td><select ${attrs("access")}>${optionList(ACCESS, row.access)}</select></td>`;
+    `<td><select ${attrs("access")}>${optionList(ACCESS, row.access, {RO: "R", WO: "W"})}</select></td>`;
   const selection = row.enumDomain;
   const definition = selection && project.enums.find(item => item.id === selection.enumId);
   const member = definition && definition.members.find(item => item.id === selection?.defaultMemberId);
-  const valueCells = selection ? `<td colspan="2" class="enum-cell">
+  const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell"><span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}</td><td class="enum-cell bitset-cell">${Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力"}</td>` : selection ? `<td colspan="2" class="enum-cell">
     <span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}
     </td><td class="enum-cell">${member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択"}</td>` :
     input("min", reserved || string) + input("max", reserved || string) + input("default", reserved);
@@ -191,7 +192,14 @@ function renderLengths() {
       <td><button type="button" class="small danger" data-delete-length>削除</button></td></tr>`).join("");
 }
 
-function replaceProject(next: DraftProject, name: string, enumForm: EnumFormDraft | null = null) {
+function renderResetGroups() {
+  $("reset-group-body").innerHTML = project.resetGroupDefs.map((group, index) =>
+    `<tr data-index="${index}"><td><input data-field="id" aria-label="グループID ${index + 1}" value="${escapeHtml(group.id)}"></td>
+      <td><input data-field="label" aria-label="表示名 ${index + 1}" value="${escapeHtml(group.label)}"></td>
+      <td><button type="button" class="small danger" data-delete-reset-group>削除</button></td></tr>`).join("");
+}
+
+function replaceProject(next: DraftProject, name: string, enumForm: EnumFormDraft | null = null, bitsetForm: BitsetFormDraft | null = null) {
   project = next;
   sourceName = name;
   configInputs.slaveAddress.value = project.config.slaveAddress;
@@ -200,8 +208,10 @@ function replaceProject(next: DraftProject, name: string, enumForm: EnumFormDraf
   typeFilter.value = "";
   renderSource();
   renderLengths();
+  renderResetGroups();
   const enumIndex = enumForm ? enumForm.index : next.enums.length ? 0 : null;
   editEnum(enumIndex, enumForm ?? undefined);
+  editBitset(bitsetForm ? bitsetForm.index : next.bitsetDefs.length ? 0 : null, bitsetForm ?? undefined);
   renderTable();
 }
 
@@ -221,6 +231,12 @@ function validatedForExport(): ValidatedProject | null {
   return null;
 }
 
+function renderResetMemberships(row: DraftRegister) {
+  $("detail-reset-memberships").innerHTML = project.resetGroupDefs.length ?
+    project.resetGroupDefs.map(group => `<label><input type="checkbox" data-reset-group="${escapeHtml(group.id)}"${row.resetGroups.includes(group.id) ? " checked" : ""}${row.type === "reserved" ? " disabled" : ""}> ${escapeHtml(group.label)}</label>`).join("") :
+    "<p>部分初期化グループを登録すると選択できます。</p>";
+}
+
 function openDetail(index: number) {
   const row = project.registers[index];
   if (!row) return;
@@ -233,6 +249,7 @@ function openDetail(index: number) {
     control.value = control.disabled ? UNUSED : String(row[key]);
   }
   openEnumDetail(row);
+  renderResetMemberships(row);
   detailDialog.showModal();
 }
 
@@ -326,9 +343,10 @@ $("register-body").addEventListener("input", event => {
   if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
   const field = target.dataset.field;
   const index = rowIndex(target);
-  if (!isOneOf(TABLE_FIELDS, field) || index === null) return;
+  if (index === null) return;
   const row = project.registers[index];
   if (!row) return;
+  if (!isOneOf(TABLE_FIELDS, field)) return;
   const previousType = row.type;
   row[field] = target.value;
   if (field === "type") {
@@ -350,6 +368,13 @@ $("detail-body").addEventListener("input", event => {
   if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement)) return;
   const row = project.registers[detailIndex];
   if (!row) return;
+  if (target instanceof HTMLInputElement && target.dataset.resetGroup !== undefined) {
+    if (row.type === "reserved") return;
+    const id = target.dataset.resetGroup;
+    row.resetGroups = target.checked ? [...new Set([...row.resetGroups, id])] : row.resetGroups.filter(value => value !== id);
+    recordEdit();
+    return;
+  }
   const key = target.dataset.detail;
   if (isOneOf(FLAGS, key)) row[key] = target.value === "true";
   else if (isOneOf(DETAIL_TEXT_FIELDS, key)) row[key] = target.value;
@@ -390,6 +415,44 @@ $("length-body").addEventListener("click", event => {
   renderLengths();
   recordEdit();
 });
+$("open-reset-groups").addEventListener("click", () => resetGroupDialog.showModal());
+$("add-reset-group").addEventListener("click", () => {
+  project.resetGroupDefs.push({id: "", label: ""});
+  renderResetGroups();
+  recordEdit();
+});
+$("reset-group-body").addEventListener("input", event => {
+  const {target} = event;
+  if (!(target instanceof HTMLInputElement)) return;
+  const index = rowIndex(target);
+  const field = target.dataset.field;
+  if (index === null || (field !== "id" && field !== "label")) return;
+  const group = project.resetGroupDefs[index];
+  if (!group) return;
+  const previous = group.id;
+  group[field] = target.value;
+  if (field === "id" && previous) {
+    for (const row of project.registers) row.resetGroups = row.resetGroups.map(id => id === previous ? target.value : id);
+  }
+  renderTable();
+  recordEdit();
+});
+$("reset-group-body").addEventListener("click", event => {
+  const {target} = event;
+  if (!(target instanceof HTMLButtonElement) || !Object.hasOwn(target.dataset, "deleteResetGroup")) return;
+  const index = rowIndex(target);
+  if (index === null) return;
+  const group = project.resetGroupDefs[index];
+  if (project.registers.some(row => row.resetGroups.includes(group.id))) {
+    message("所属レジスタのチェックを外してからグループを削除してください。", true);
+    return;
+  }
+  project.resetGroupDefs.splice(index, 1);
+  renderResetGroups();
+  renderTable();
+  recordEdit();
+});
+
 document.querySelectorAll("[data-close]").forEach(button => {
   button.addEventListener("click", () => button.closest("dialog")?.close());
 });

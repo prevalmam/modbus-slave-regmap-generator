@@ -1,5 +1,5 @@
-type EditorTab = "register" | "enum";
-const editorTabs: readonly EditorTab[] = ["register", "enum"];
+type EditorTab = "register" | "enum" | "bitset";
+const editorTabs: readonly EditorTab[] = ["register", "enum", "bitset"];
 
 function showEditorTab(active: EditorTab) {
   for (const name of editorTabs) {
@@ -18,9 +18,9 @@ for (const name of editorTabs) {
     let next: EditorTab;
     switch (event.key) {
       case "Home": next = "register"; break;
-      case "End": next = "enum"; break;
+      case "End": next = "bitset"; break;
       case "ArrowLeft":
-      case "ArrowRight": next = name === "register" ? "enum" : "register"; break;
+      case "ArrowRight": next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? 2 : 1)) % editorTabs.length]; break;
       default: return;
     }
     event.preventDefault();
@@ -170,6 +170,7 @@ function renderEnumDetailMode() {
   document.querySelectorAll<HTMLElement>("[data-enum-detail]").forEach(label => {
     label.hidden = detailKind.value !== "enum";
   });
+  renderBitsetDetailMode();
 }
 
 function supportsEnum(row: DraftRegister) {
@@ -180,14 +181,16 @@ function supportsEnum(row: DraftRegister) {
 function openEnumDetail(row: DraftRegister) {
   const selection = row.enumDomain;
   const eligible = supportsEnum(row);
-  $("enum-detail").hidden = !eligible && !selection;
+  $("enum-detail").hidden = !eligible && !selection && !supportsBitset(row) && !row.bitsetDomain;
   detailKind.options[1].disabled = !eligible;
-  detailKind.value = selection ? "enum" : "range";
+  detailKind.options[2].disabled = !supportsBitset(row);
+  detailKind.value = selection ? "enum" : row.bitsetDomain ? "bitset" : "range";
   detailEnum.replaceChildren(new Option("列挙型を選択", "", true, true),
     ...project.enums.map(definition => new Option(definition.label, definition.id)));
   if (selection && project.enums.some(definition => definition.id === selection.enumId)) detailEnum.value = selection.enumId;
   renderEnumDetailMode();
   renderEnumDetailMembers(selection?.defaultMemberId);
+  openBitsetDetail(row);
 }
 
 function updateEnumSelection() {
@@ -195,6 +198,8 @@ function updateEnumSelection() {
   if (!row) return;
   row.enumDomain = detailKind.value === "enum" ?
     {kind: "enum", enumId: detailEnum.value, defaultMemberId: detailDefault.value} : null;
+  if (detailKind.value === "bitset") updateBitsetSelection();
+  else row.bitsetDomain = null;
   recordEdit();
 }
 

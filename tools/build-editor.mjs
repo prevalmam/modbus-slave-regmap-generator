@@ -1,9 +1,9 @@
 import {readFile, writeFile} from "node:fs/promises";
 
-const [template, script] = await Promise.all([
+const [template, script] = (await Promise.all([
   readFile(new URL("../src/editor/editor.template.html", import.meta.url), "utf8"),
   readFile(new URL("../build/editor/editor.js", import.meta.url), "utf8")
-]);
+])).map(text => text.replace(/\r\n?/g, "\n"));
 const marker = "/* @editor-script */";
 const parts = template.split(marker);
 if (parts.length !== 2 || /<\/script/i.test(script)) {

@@ -1,11 +1,12 @@
 
-/* Output order and formatting follow the Python slave generator. */
+/* Generate C90-compatible slave code from the validated JSON definition. */
 type GeneratedFiles = Record<string, string>;
 type GeneratorEntry = Omit<RegisterDefinition, "valueDomain"> & {
   min: number | Unused;
   max: number | Unused;
   default: number | string;
   definition?: RegisterEnum;
+  bitsetDefinition?: BitsetDefinition;
   count: number;
   bytes: number;
   registerCount: number;
@@ -36,9 +37,10 @@ const hasGroup = (entry: GeneratorEntry) => entry.type !== "reserved" && entry.g
 const hex = (value: number, width: number) => value.toString(16).toUpperCase().padStart(width, "0");
 
 function generatorEntries(project: ValidatedProject): GeneratorEntry[] {
-  const {lengthDefs, registers, enums} = project.documentValue;
+  const {lengthDefs, registers, enums, bitsetDefs} = project.documentValue;
   const lengths = new Map(lengthDefs.map(entry => [entry.name, entry.length]));
   const definitions = new Map(enums.map(definition => [definition.id, definition]));
+  const bitsById = new Map(bitsetDefs.map(definition => [definition.id, definition]));
   return registers.map(row => {
     const count = typeof row.length === "number" ? row.length : lengths.get(row.length);
     if (count === undefined) throw Error("配列長定義が見つかりません。" + row.name);
@@ -46,18 +48,23 @@ function generatorEntries(project: ValidatedProject): GeneratorEntry[] {
     const array = isOneOf(NUMERIC_TYPES, row.type) && count > 1;
     const {valueDomain, ...fields} = row;
     let definition: RegisterEnum | undefined;
+    let bitsetDefinition: BitsetDefinition | undefined;
     let values: Pick<GeneratorEntry, "min" | "max" | "default">;
     if (valueDomain.kind === "enum") {
       definition = definitions.get(valueDomain.enumId);
       const range = definition && enumRange(definition, valueDomain.defaultMemberId);
       if (!range) throw Error("列挙型または初期値が見つかりません。" + row.name);
       values = range;
+    } else if (valueDomain.kind === "bitset") {
+      bitsetDefinition = bitsById.get(valueDomain.bitsetId);
+      if (!bitsetDefinition) throw Error("Missing bitset definition: " + row.name);
+      values = {min: 0, max: bitsetDefinition.width === 32 ? 4294967295 : 65535, default: valueDomain.default};
     } else if (valueDomain.kind === "range") {
       values = {min: valueDomain.min, max: valueDomain.max, default: valueDomain.default};
     } else {
       values = {min: UNUSED, max: UNUSED, default: valueDomain.kind === "string" ? valueDomain.default : UNUSED};
     }
-    return {...fields, ...values, definition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
+    return {...fields, ...values, definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
       registerCount: bytes / 2,
       enumType: C_TYPES[row.type] + (array ? "_ARRAY" : "")};
   });
@@ -92,7 +99,10 @@ function generateRegisterIndex(entries: readonly GeneratorEntry[], slaveAddress:
 
 function generateRegisterMap(project: RegmapDocument, entries: readonly GeneratorEntry[]): GeneratedFiles {
   const lengthMacros = project.lengthDefs.map(({name,length}) => `#define ${name} (${length}U)\n`).join("");
-  const header = REGMAP_HEADER.replace("@NVM_SIZE@", String(project.config.nvmSize)).replace("@LENGTH_DEFS@", lengthMacros);
+  const maxEntrySize = entries.reduce((maximum, entry) =>
+    entry.type !== "reserved" && entry.nvmOffset !== UNUSED ? Math.max(maximum, entry.bytes) : maximum, 0);
+  const header = REGMAP_HEADER.replace("@NVM_SIZE@", String(project.config.nvmSize))
+    .replace("@NVM_MAX_ENTRY_SIZE_BYTES@", String(maxEntrySize)).replace("@LENGTH_DEFS@", lengthMacros);
   const declarations: string[] = [];
   const tableRows: string[] = [];
   for (const entry of entries) {
@@ -131,7 +141,8 @@ function generateRegisterMap(project: RegmapDocument, entries: readonly Generato
   }
   return {
     "modbus_reg_map_slave.h": header,
-    "modbus_reg_map_slave.c": ['#include "modbus_reg_map_slave.h"', "", ...declarations, "",
+    "modbus_reg_map_slave_internal.h": REGMAP_INTERNAL_HEADER,
+    "modbus_reg_map_slave.c": ['#include "modbus_reg_map_slave_internal.h"', "", ...declarations, "",
       "const reg_table_entry_t g_reg_table_slave[] = {", ...tableRows, "};", "", REGMAP_FOOTER].join("\n")
   };
 }
@@ -152,18 +163,22 @@ function accessBindings(entry: GeneratorEntry) {
 }
 
 const ENUM_INCLUDE = '#include "modbus_reg_enums_slave.h"';
+const ENUM_INTERNAL_INCLUDE = '#include "modbus_reg_enum_internal_slave.h"';
 
 function generateEnums(definitions: readonly RegisterEnum[], entries: readonly GeneratorEntry[]): GeneratedFiles {
   if (!definitions.length) return {};
   const assigned = entries.filter(entry => entry.definition);
-  const header = ["#ifndef MODBUS_REG_ENUMS_SLAVE_H", "#define MODBUS_REG_ENUMS_SLAVE_H", "", "#include <stdint.h>", ""];
-  const source = [ENUM_INCLUDE];
+  const header = ["#ifndef MODBUS_REG_ENUMS_SLAVE_H", "#define MODBUS_REG_ENUMS_SLAVE_H", ""];
+  const internal = ["#ifndef MODBUS_REG_ENUM_INTERNAL_SLAVE_H", "#define MODBUS_REG_ENUM_INTERNAL_SLAVE_H", "",
+    "#include <stdint.h>", ENUM_INCLUDE, ""];
+  const source = [ENUM_INTERNAL_INCLUDE];
   if (assigned.length) source.push('#include "modbus_reg_idx_slave.h"');
   source.push("");
   for (const {id, members} of definitions) {
     const type = id + "_t";
     const constants = members.map((member, index) => "    " + enumMemberCName(id, member.id) + " = " + index);
-    header.push("typedef enum", "{", constants.join(",\n"), "} " + type + ";", "",
+    header.push("typedef enum", "{", constants.join(",\n"), "} " + type + ";", "");
+    internal.push(
       `int ${id}_from_register(uint16_t raw, ${type} *out_value);`,
       `int ${id}_to_register(${type} value, uint16_t *out_raw);`, "");
 
@@ -208,7 +223,7 @@ int ${id}_to_register(${type} value, uint16_t *out_raw)
   }
   if (assigned.length) {
     const check = "int modbus_reg_enum_wire_value_is_valid(uint16_t table_index, uint16_t raw)";
-    header.push(check + ";", "");
+    internal.push(check + ";", "");
     source.push(check, "{", "    switch (table_index)", "    {");
     for (const entry of assigned) {
       const id = entry.definition!.id;
@@ -221,7 +236,9 @@ int ${id}_to_register(${type} value, uint16_t *out_raw)
     source.push("        default:", "            return 1;", "    }", "}", "");
   }
   header.push("#endif", "");
-  return {"modbus_reg_enums_slave.h": header.join("\n"), "modbus_reg_enums_slave.c": source.join("\n")};
+  internal.push("#endif", "");
+  return {"modbus_reg_enums_slave.h": header.join("\n"),
+    "modbus_reg_enum_internal_slave.h": internal.join("\n"), "modbus_reg_enums_slave.c": source.join("\n")};
 }
 
 function enumAccessSource(entry: GeneratorEntry, definition: RegisterEnum): string {
@@ -234,6 +251,7 @@ function enumAccessSource(entry: GeneratorEntry, definition: RegisterEnum): stri
     return ${id}_from_register(read_uint16(${tableEntry(entry)}.ram_ptr),
                                  out_value);
 }
+
 
 int set_${name}(${id}_t value)
 {
@@ -252,13 +270,114 @@ int set_${name}(${id}_t value)
 `;
 }
 
+function generateBitsetTypes(definitions: readonly BitsetDefinition[]): GeneratedFiles {
+  if (!definitions.length) return {};
+  const header = ["#ifndef MODBUS_REG_BITS_SLAVE_H", "#define MODBUS_REG_BITS_SLAVE_H", "", "#include <stdint.h>", "",
+    "typedef enum", "{", "    MODBUS_BIT_OFF = 0,", "    MODBUS_BIT_ON = 1", "} modbus_bit_state_t;", ""];
+  for (const definition of definitions) {
+    for (const bit of definition.bits) {
+      header.push(`#define ${bitMaskName(definition, bit)} (1${definition.width === 32 ? "UL" : "U"} << ${bit.bit})`);
+    }
+    header.push("", "typedef struct", "{", ...definition.bits.map(bit => `    modbus_bit_state_t ${bit.id};`),
+      `} ${definition.id}_bits_t;`, "");
+  }
+  header.push("#endif", "");
+  return {"modbus_reg_bits_slave.h": header.join("\n")};
+}
+
+function bitsetAccess(entry: GeneratorEntry, definition: BitsetDefinition): {header: string; source: string} {
+  const {name, type} = entry;
+  const bitsType = definition.id + "_bits_t";
+  const raw = `read_${SCALAR_SUFFIX[type as "uint16_t" | "uint32_t"]}(${tableEntry(entry)}.ram_ptr)`;
+  const set = `reg_slave_set_${SCALAR_SUFFIX[type as "uint16_t" | "uint32_t"]}`;
+  const notify = entry.updateNotify ? `\n    modbus_reg_update_notify_internal_set(${indexMacro(entry)});` : "";
+  const header = [`${type} get_${name}(void);`, `${type} get_${name}_default(void);`,
+    `${bitsType} get_${name}_bits(void);`, `int set_${name}_bits(${bitsType} bits);`, `int clear_${name}_all(void);`];
+  const source = [`${type} get_${name}(void)
+{
+    return ${raw};
+}
+
+${type} get_${name}_default(void)
+{
+    return *(const ${type} *)${tableEntry(entry)}.default_value;
+}
+
+static int apply_${name}_bits_raw(${type} raw)
+{
+    if (${set}(${indexMacro(entry)}, raw) == 0)
+    {
+        return 0;
+    }${notify}
+    return 1;
+}
+
+${bitsType} get_${name}_bits(void)
+{
+    ${bitsType} bits;
+    ${type} raw;
+
+    raw = get_${name}();
+${definition.bits.map(bit => `    bits.${bit.id} = (raw & ${bitMaskName(definition, bit)}) != 0${definition.width === 32 ? "UL" : "U"} ? MODBUS_BIT_ON : MODBUS_BIT_OFF;`).join("\n")}
+    return bits;
+}
+
+int set_${name}_bits(${bitsType} bits)
+{
+    ${type} raw;
+
+${definition.bits.map(bit => `    if ((bits.${bit.id} != MODBUS_BIT_OFF) && (bits.${bit.id} != MODBUS_BIT_ON))
+    {
+        return 0;
+    }`).join("\n")}
+    raw = (${type})(get_${name}() & (${type})~(${definition.bits.map(bit => bitMaskName(definition, bit)).join(" | ")}));
+${definition.bits.map(bit => `    if (bits.${bit.id} == MODBUS_BIT_ON)
+    {
+        raw = (${type})(raw | ${bitMaskName(definition, bit)});
+    }`).join("\n")}
+    return apply_${name}_bits_raw(raw);
+}
+
+int clear_${name}_all(void)
+{
+    return apply_${name}_bits_raw(0${definition.width === 32 ? "UL" : "U"});
+}`];
+  for (const bit of definition.bits) {
+    const mask = bitMaskName(definition, bit);
+    header.push(`modbus_bit_state_t get_${name}_${bit.id}(void);`, `int set_${name}_${bit.id}(modbus_bit_state_t on);`);
+    source.push(`modbus_bit_state_t get_${name}_${bit.id}(void)
+{
+    return (get_${name}() & ${mask}) != 0${definition.width === 32 ? "UL" : "U"} ? MODBUS_BIT_ON : MODBUS_BIT_OFF;
+}
+
+int set_${name}_${bit.id}(modbus_bit_state_t on)
+{
+    ${type} raw;
+
+    if ((on != MODBUS_BIT_OFF) && (on != MODBUS_BIT_ON))
+    {
+        return 0;
+    }
+    raw = (${type})(get_${name}() & (${type})~${mask});
+    if (on == MODBUS_BIT_ON)
+    {
+        raw = (${type})(raw | ${mask});
+    }
+    return apply_${name}_bits_raw(raw);
+}`);
+  }
+  return {header: header.join("\n") + "\n", source: source.join("\n\n") + "\n"};
+}
+
 function generateAccess(entries: readonly GeneratorEntry[]): GeneratedFiles {
   const actual = entries.filter(entry => entry.type !== "reserved");
   const types = new Set(actual.map(entry => entry.type));
   const scalarTypes = new Set(actual.filter(entry => entry.count === 1).map(entry => entry.type));
   const header = [actual.some(entry => entry.definition) ?
     ACCESS_HEADER_START.replace("#include <stdint.h>", "#include <stdint.h>\n" + ENUM_INCLUDE) : ACCESS_HEADER_START];
+  if (actual.some(entry => entry.bitsetDefinition)) header.push('#include "modbus_reg_bits_slave.h"');
   const source = [ACCESS_SOURCE_START];
+  if (actual.some(entry => entry.definition)) source.push(ENUM_INTERNAL_INCLUDE);
   if (types.has("string")) source.push("#include <string.h>");
   source.push(ACCESS_NVM_HELPER);
   if (types.has("string")) source.push(ACCESS_STRING_HELPERS);
@@ -275,6 +394,10 @@ function generateAccess(entries: readonly GeneratorEntry[]): GeneratedFiles {
       const type = entry.definition.id + "_t";
       header.push(`int get_${entry.name}(${type} *out_value);\nint set_${entry.name}(${type} value);\n`);
       source.push(enumAccessSource(entry, entry.definition));
+    } else if (entry.bitsetDefinition) {
+      const bits = bitsetAccess(entry, entry.bitsetDefinition);
+      header.push(bits.header);
+      source.push(bits.source);
     } else if (entry.type === "string") {
       header.push(fillC(ACCESS_STRING_H, bindings));
       source.push(fillC(ACCESS_STRING_C, bindings));
@@ -360,10 +483,14 @@ function snapshotField(entry: GeneratorEntry) {
     `    const ${entry.type} *${entry.name};`;
 }
 
+function validationValueField(entry: GeneratorEntry) {
+  const type = entry.definition ? entry.definition.id + "_t" : entry.type === "string" ? "char" : entry.type;
+  return `    ${type} ${entry.name}${entry.array || entry.type === "string" ? `[${entry.count}U]` : ""};`;
+}
+
 function generateWriteGuards(entries: readonly GeneratorEntry[], groups: ValidationGroups): GeneratedFiles {
   const busy = entries.filter(entry => entry.busyReject);
   const checked = entries.filter(entry => entry.writeCheck);
-  const snapshots = entries.filter(hasGroup);
   const header = [`#ifndef MODBUS_REG_WRITE_GUARD_SLAVE_H
 #define MODBUS_REG_WRITE_GUARD_SLAVE_H
 
@@ -386,26 +513,18 @@ typedef struct
     const char *data;
     uint16_t length;
 } modbus_string_view_t;
-
-typedef struct
-{`];
-  for (const entry of snapshots) {
-    header.push(snapshotField(entry));
-  }
-  if (!snapshots.length) header.push("    const uint8_t *unused;");
-  header.push("} modbus_reg_snapshot_t;");
+`];
+  header.push("/* Validation arguments own copies; valid only during the callback. */");
   for (const [group, groupEntries] of groups) {
-    if (!groupEntries.some(entry => entry.definition)) continue;
     header.push("", "typedef struct", "{");
     for (const entry of groupEntries) {
-      header.push(entry.definition ? `    ${entry.definition.id}_t ${entry.name};` : snapshotField(entry));
+      header.push(validationValueField(entry));
     }
     header.push(`} ${groupAfterType(group)};`);
   }
-  header.push("", "/* BUSY_REJECT accessors */");
+  header.push("", "/* User-provided synchronous BUSY_REJECT callbacks */");
   for (const entry of busy) {
-    header.push(`MB_BOOL modbus_get_busy_reject_${entry.name}(void);`,
-      `void modbus_set_busy_reject_${entry.name}(MB_BOOL busy);`);
+    header.push(`MB_BOOL modbus_user_is_busy_${entry.name}(void);`);
   }
   if (!busy.length) header.push("/* No BUSY_REJECT entries. */");
   header.push("", "/* User-provided WRITE_CHECK callbacks */");
@@ -421,7 +540,7 @@ typedef struct
   if (!checked.length) header.push("/* No WRITE_CHECK callbacks. */");
   header.push("", "/* User-provided GROUP_VALIDATE callbacks */");
   for (const [group, groupEntries] of groups) {
-    const afterType = groupEntries.some(entry => entry.definition) ? groupAfterType(group) : "modbus_reg_snapshot_t";
+    const afterType = groupAfterType(group);
     header.push(`extern modbus_write_result_t modbus_user_group_validate_${group}(`,
       `    const ${afterType} *after);`);
   }
@@ -429,31 +548,9 @@ typedef struct
   header.push("", "MB_BOOL modbus_write_guard_entry_is_busy(uint16_t reg_table_index);", "", "#endif", "");
 
   const source = ['#include "modbus_reg_write_guard_slave.h"', '#include "modbus_reg_idx_slave.h"', ""];
-  if (busy.length) source.push(`static uint8_t s_busy_reject_bits[${Math.ceil(busy.length / 8)}U];`, "");
-  busy.forEach(({name}, bit) => {
-    const cell = `s_busy_reject_bits[${Math.floor(bit / 8)}U]`;
-    const mask = "0x" + hex(1 << (bit % 8),2) + "U";
-    source.push(`MB_BOOL modbus_get_busy_reject_${name}(void)
-{
-    return ((${cell} & ${mask}) != 0U)
-        ? MB_TRUE : MB_FALSE;
-}
-
-void modbus_set_busy_reject_${name}(MB_BOOL busy)
-{
-    if (busy != MB_FALSE)
-    {
-        ${cell} |= ${mask};
-    }
-    else
-    {
-        ${cell} &= (uint8_t)(~${mask});
-    }
-}`, "");
-  });
   source.push("MB_BOOL modbus_write_guard_entry_is_busy(uint16_t reg_table_index)", "{", "    switch (reg_table_index)", "    {");
   for (const entry of busy) {
-    source.push(`        case ${indexMacro(entry)}:`, `            return modbus_get_busy_reject_${entry.name}();`);
+    source.push(`        case ${indexMacro(entry)}:`, `            return modbus_user_is_busy_${entry.name}();`);
   }
   source.push("        default:", "            return MB_FALSE;", "    }", "}", "");
   return {"modbus_reg_write_guard_slave.h": header.join("\n"), "modbus_reg_write_guard_slave.c": source.join("\n")};
@@ -486,23 +583,32 @@ function generateParser(entries: readonly GeneratorEntry[], groups: ValidationGr
         }`);
     } else if (type === "string") {
       checks.push(`        {
+            char current_data[${entry.count}U];
+            char new_data[${entry.count}U];
             modbus_string_view_t current_value;
             modbus_string_view_t new_value;
 
-            current_value.data = (const char *)entry->ram_ptr;
+            (void)memcpy(current_data, entry->ram_ptr, sizeof(current_data));
+            (void)memcpy(new_data, after_value, sizeof(new_data));
+            current_value.data = current_data;
             current_value.length = modbus_string_field_length(
                 current_value.data, entry->size);
-            new_value.data = (const char *)after_value;
+            new_value.data = new_data;
             new_value.length = modbus_string_field_length(
                 new_value.data, entry->size);
             return modbus_user_write_check_${name}(
                 &current_value, &new_value);
         }`);
     } else if (entry.array) {
-      checks.push(`            return modbus_user_write_check_${name}(
-                (const ${type} *)entry->ram_ptr,
-                (const ${type} *)after_value,
-                entry->length);`);
+      checks.push(`        {
+            ${type} current_value[${entry.count}U];
+            ${type} new_value[${entry.count}U];
+
+            (void)memcpy(current_value, entry->ram_ptr, sizeof(current_value));
+            (void)memcpy(new_value, after_value, sizeof(new_value));
+            return modbus_user_write_check_${name}(
+                current_value, new_value, entry->length);
+        }`);
     } else {
       checks.push(`            return modbus_user_write_check_${name}(
                 *((const ${type} *)entry->ram_ptr),
@@ -544,23 +650,22 @@ function generateParser(entries: readonly GeneratorEntry[], groups: ValidationGr
             group_${group}_affected = MB_TRUE;
         }`);
     validation.push(`    if (group_${group}_affected != MB_FALSE)`, "    {");
-    const withEnum = groupEntries.some(entry => entry.definition);
-    if (withEnum) {
-      validation.push(`        ${groupAfterType(group)} after;`, "");
-      for (const {definition, name} of groupEntries) {
-        if (definition) {
-          validation.push(`        if (${definition.id}_from_register(
-                *snapshot.${name}, &after.${name}) == 0)
+    const after = `validation_copy.${group}`;
+    for (const {definition, name, array, type} of groupEntries) {
+      if (definition) {
+        validation.push(`        if (${definition.id}_from_register(
+                *snapshot.${name}, &${after}.${name}) == 0)
         {
             return MODBUS_EXC_SLAVE_DEVICE_FAILURE;
         }`);
-        } else {
-          validation.push(`        after.${name} = snapshot.${name};`);
-        }
+      } else if (array || type === "string") {
+        validation.push(`        (void)memcpy(${after}.${name}, snapshot.${name}${type === "string" ? ".data" : ""}, sizeof(${after}.${name}));`);
+      } else {
+        validation.push(`        ${after}.${name} = *snapshot.${name};`);
       }
     }
     validation.push(`        user_result = normalize_user_write_result(
-            modbus_user_group_validate_${group}(&${withEnum ? "after" : "snapshot"}));
+            modbus_user_group_validate_${group}(&${after}));
         if (user_result != MODBUS_WRITE_OK)
         {
             return (int)user_result;
@@ -569,6 +674,11 @@ function generateParser(entries: readonly GeneratorEntry[], groups: ValidationGr
   }
 
   const blocks: Record<string, string[]> = {
+    "@SNAPSHOT_TYPE@": ["/* Internal pointers never cross the validation callback boundary. */", "typedef struct", "{",
+      ...(snapshots.length ? snapshots.map(snapshotField) : ["    const uint8_t *unused;"]), "} modbus_reg_snapshot_t;", ""],
+    "@GROUP_COPY_TYPE@": groups.size ? ["/* All group callbacks share storage for one isolated value copy. */", "typedef union", "{",
+      ...Array.from(groups.keys(), group => `    ${groupAfterType(group)} ${group};`), "} modbus_validation_copy_t;", ""] : [],
+    "@GROUP_COPY_VAR@": groups.size ? ["    modbus_validation_copy_t validation_copy;"] : [],
     "@CHECKS@": checks, "@INITIALIZE@": init, "@SET_POINTER@": pointers,
     "@GROUP_FLAGS@": flags, "@GROUP_MEMBERS@": members, "@GROUP_VALIDATE@": validation,
     "@DEFAULT_CHECK@": withEnums ? [`            if ((entry->type == REG_TYPE_UINT16) &&
@@ -580,7 +690,7 @@ function generateParser(entries: readonly GeneratorEntry[], groups: ValidationGr
   };
   const atomic = PARSER_ATOMIC.split("\n").flatMap(line => blocks[line] ?? [line]).join("\n");
   return {"modbus_parser.h": PARSER_HEADER, "modbus_parser.c": PARSER_SOURCE
-    .replace("@ENUM_INCLUDE@\n", withEnums ? ENUM_INCLUDE + "\n" : "").replace("@ATOMIC@", () => atomic)};
+    .replace("@ENUM_INCLUDE@\n", withEnums ? ENUM_INTERNAL_INCLUDE + "\n" : "").replace("@ATOMIC@", () => atomic)};
 }
 
 function generateModbusFiles(validated: ValidatedProject): GeneratedFiles {
@@ -593,7 +703,9 @@ function generateModbusFiles(validated: ValidatedProject): GeneratedFiles {
   }
   const {enums} = validated.documentValue;
   const files: GeneratedFiles = {
+    ...generateNvm(validated.documentValue, entries),
     ...generateEnums(enums, entries),
+    ...generateBitsetTypes(validated.documentValue.bitsetDefs),
     ...generateRegisterMap(validated.documentValue, entries),
     "modbus_reg_idx_slave.h": generateRegisterIndex(entries, validated.documentValue.config.slaveAddress),
     ...generateAccess(entries),
@@ -601,11 +713,8 @@ function generateModbusFiles(validated: ValidatedProject): GeneratedFiles {
     ...generateWriteGuards(entries, groups),
     ...generateParser(entries, groups)
   };
-  if (enums.length) {
-    // TI's strict ANSI mode requires a final newline. Preserve Python bytes for legacy-only exports.
-    for (const name of Object.keys(files)) {
-      if (!files[name].endsWith("\n")) files[name] += "\n";
-    }
+  for (const name of Object.keys(files)) {
+    if (!files[name].endsWith("\n")) files[name] += "\n";
   }
   return files;
 }

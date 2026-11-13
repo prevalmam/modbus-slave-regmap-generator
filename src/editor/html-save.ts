@@ -3,6 +3,7 @@ type EditorHtmlDraft = {
   sourceName: string;
   project: DraftProject;
   enumForm: EnumFormDraft | null;
+  bitsetForm?: BitsetFormDraft | null;
 };
 type SaveHtmlPicker = (options: {
   id: string;
@@ -36,9 +37,23 @@ function parseHtmlDraft(text: string): EditorHtmlDraft | null {
   if (!textFields(config, ["slaveAddress", "nvmSize"]) ||
       !isList(lengthDefs) || !lengthDefs.every(row => textFields(row, ["name", "length"])) ||
       !isList(enums) || !isList(registers)) throw Error(invalid);
+  const groups = value.project.resetGroupDefs ?? [];
+  if (!isList(groups) || !groups.every(group => textFields(group, ["id", "label"]))) throw Error(invalid);
+  value.project.resetGroupDefs = groups;
+  const bitsets = value.project.bitsetDefs ?? [];
+  if (!isList(bitsets)) throw Error(invalid);
+  bitsets.forEach(item => decodeBitset(item, invalid));
+  value.project.bitsetDefs = bitsets;
   enums.forEach(item => decodeEnum(item, invalid));
   for (const row of registers) {
     if (!textFields(row, TEXT_FIELDS) || !FLAGS.every(key => typeof row[key] === "boolean")) throw Error(invalid);
+    const memberships = row.resetGroups ?? [];
+    if (!isList(memberships) || !memberships.every(id => typeof id === "string")) throw Error(invalid);
+    row.resetGroups = memberships;
+    const bitset = row.bitsetDomain ?? null;
+    if (bitset !== null && (!isObject(bitset) || bitset.kind !== "bitset" ||
+        typeof bitset.bitsetId !== "string" || typeof bitset.default !== "number")) throw Error(invalid);
+    row.bitsetDomain = bitset;
     const domain = row.enumDomain;
     if (domain !== null && (!textFields(domain, ["enumId", "defaultMemberId"]) || domain.kind !== "enum")) {
       throw Error(invalid);
@@ -51,11 +66,17 @@ function parseHtmlDraft(text: string): EditorHtmlDraft | null {
       !isList(form.members) || !form.members.every(member => textFields(member, ["id", "value", "label"])))) {
     throw Error(invalid);
   }
+  const bitsetForm = value.bitsetForm ?? null;
+  if (bitsetForm !== null && (!textFields(bitsetForm, ["id", "label", "width"]) ||
+      (bitsetForm.index !== null && (typeof bitsetForm.index !== "number" || !Number.isInteger(bitsetForm.index) ||
+        bitsetForm.index < 0 || bitsetForm.index >= bitsets.length)) ||
+      !isList(bitsetForm.bits) || !bitsetForm.bits.every(bit => textFields(bit, ["bit", "id", "label"])))) throw Error(invalid);
+  value.bitsetForm = bitsetForm;
   return value as EditorHtmlDraft;
 }
 
 function currentHtmlDraft(): string {
-  const draft: EditorHtmlDraft = {version: 1, sourceName, project, enumForm: pendingEnumForm()};
+  const draft: EditorHtmlDraft = {version: 1, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm()};
   return JSON.stringify(draft);
 }
 
@@ -222,8 +243,8 @@ function finishProjectReplacement(proceed: boolean) {
 }
 
 function applyHtmlDraft(draft: EditorHtmlDraft) {
-  replaceProject(draft.project, draft.sourceName, draft.enumForm);
-  showEditorTab(draft.enumForm ? "enum" : "register");
+  replaceProject(draft.project, draft.sourceName, draft.enumForm, draft.bitsetForm);
+  showEditorTab(draft.bitsetForm ? "bitset" : draft.enumForm ? "enum" : "register");
 }
 
 function initializeHtmlSave() {
