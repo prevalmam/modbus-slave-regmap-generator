@@ -78,6 +78,7 @@ test("generated float decoder retains range and infinity rejection", () => {
 const sent = [];
 const echo = vm.runInNewContext(
   jsFunction("modbus_append_crc", "frame, len_without_crc") + "\n" +
+  jsFunction("modbus_send_frame", "slave_addr, frame, length") + "\n" +
   jsFunction("modbus_send_echo_response", "slave_addr, rx_buf, len") +
   "\n({append: modbus_append_crc, reply: modbus_send_echo_response});",
   {Uint8Array, MODBUS_MIN_FRAME_LENGTH: 8, ModbusPort_RequestSend(frame, length) { sent.push(Array.from(frame.slice(0, length))); }});
@@ -109,6 +110,12 @@ test("diagnostic echo recalculates CRC when the response slave address changes",
   echo.reply(7, input, input.length);
   assert.deepEqual(sent, [Array.from(expected)]);
   assert.equal(input[0], 1);
+});
+test("diagnostic echo stays silent for broadcast address 0", () => {
+  sent.length = 0;
+  const data = frame(8, 0);
+  echo.reply(0, data, data.length);
+  assert.deepEqual(sent, []);
 });
 test("diagnostic echo rejects null, short and oversized frames", () => {
   sent.length = 0;
@@ -177,15 +184,15 @@ test("rejected addresses stop before CRC validation and exception responses", ()
   assert.deepEqual(gate.events, [0, 2, 241, 255].map(address => ["address", address]));
 });
 
-test("accepted addresses use the hook once then retain CRC validation", () => {
+test("accepted addresses use the hook once; CRC errors are discarded without a response", () => {
   const gate = addressGate(() => 255);
   assert.equal(gate.parse(frame(8, 7), 8), 1);
   assert.deepEqual(gate.calls, {addresses: [7], crc: 1, exceptions: []});
   for (const length of [8, 256]) {
     const invalid = addressGate(() => 1, 0);
     assert.equal(invalid.parse(frame(length, 7), length), 0);
-    assert.deepEqual(invalid.calls, {addresses: [7], crc: 1, exceptions: [[7, 8, 3]]});
-    assert.deepEqual(invalid.events, [["address", 7], ["crc", length], ["exception", 7, 8, 3]]);
+    assert.deepEqual(invalid.calls, {addresses: [7], crc: 1, exceptions: []});
+    assert.deepEqual(invalid.events, [["address", 7], ["crc", length]]);
   }
 });
 

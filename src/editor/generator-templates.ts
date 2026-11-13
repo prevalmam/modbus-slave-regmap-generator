@@ -263,6 +263,8 @@ static void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, cons
 
 static int is_float_equal(float a, float b);
 
+static void modbus_send_frame(uint8_t slave_addr, const uint8_t *frame, uint16_t length);
+
 static void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16_t len);
 static void modbus_send_write_multi_ack(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs);
 static int handle_modbus_multi_write(uint16_t start_addr, uint16_t num_regs, const uint8_t *data);
@@ -295,6 +297,16 @@ void sort_entries_by_address(const reg_table_entry_t *matched[], uint16_t count)
                 matched[j] = tmp;
             }
         }
+    }
+}
+
+static void modbus_send_frame(uint8_t slave_addr, const uint8_t *frame, uint16_t length)
+{
+    /* Broadcast requests (address 0) are applied without any response:
+       no slave may answer a broadcast frame on a shared bus. */
+    if (slave_addr != 0U)
+    {
+        ModbusPort_RequestSend(frame, length);
     }
 }
 
@@ -427,7 +439,7 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     }
 
     (void)modbus_append_crc(tx_buf, (uint16_t)(p - tx_buf));
-    ModbusPort_RequestSend(tx_buf, (uint16_t)((uint16_t)(p - tx_buf) + 2U));
+    modbus_send_frame(slave_addr, tx_buf, (uint16_t)((uint16_t)(p - tx_buf) + 2U));
 
     return 0;
 }
@@ -458,10 +470,8 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
             function   = rx_buf[1];
             valid_frame = 1;
         }
-        else
-        {
-            modbus_send_exception_response(rx_buf[0], rx_buf[1], MODBUS_EXC_ILLEGAL_DATA_VALUE);
-        }
+        /* A frame whose CRC does not match is discarded without a
+           response: Modbus over Serial Line forbids replying to it. */
     }
 
     if (valid_frame != 0)
@@ -473,10 +483,17 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                 {
                     start_addr = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | rx_buf[3]);
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
-                    status = handle_modbus_read(slave_addr, start_addr, num_regs);
-                    if (status != 0)
+                    if ((num_regs < 1U) || (num_regs > 125U))
                     {
-                        modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+                        modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_VALUE);
+                    }
+                    else
+                    {
+                        status = handle_modbus_read(slave_addr, start_addr, num_regs);
+                        if (status != 0)
+                        {
+                            modbus_send_exception_response(slave_addr, function, MODBUS_EXC_ILLEGAL_DATA_ADDRESS);
+                        }
                     }
                 }
                 else
@@ -590,7 +607,7 @@ void modbus_send_echo_response(uint8_t slave_addr, const uint8_t *rx_buf, uint16
 
         frame_len = modbus_append_crc(frame, (uint16_t)(len - 2U));
 
-        ModbusPort_RequestSend(frame, frame_len);
+        modbus_send_frame(slave_addr, frame, frame_len);
     }
 }
 
@@ -622,7 +639,7 @@ int check_range_uint32(uint32_t val, uint32_t min, uint32_t max)
 
     (void)modbus_append_crc(tx_buf, 6U);
 
-    ModbusPort_RequestSend(tx_buf, 8U);
+    modbus_send_frame(slave_addr, tx_buf, 8U);
 }
 
 void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8_t *value)
@@ -638,7 +655,7 @@ void modbus_send_write_single_ack(uint8_t slave_addr, uint16_t addr, const uint8
 
     (void)modbus_append_crc(tx_buf, 6U);
 
-    ModbusPort_RequestSend(tx_buf, 8U);
+    modbus_send_frame(slave_addr, tx_buf, 8U);
 }
 
 int modbus_validate_crc(const uint8_t* frame, uint16_t length)
@@ -691,7 +708,7 @@ void modbus_send_exception_response(uint8_t slave_addr, uint8_t function_code, u
 
     len = modbus_append_crc(response, 3U);
 
-    ModbusPort_RequestSend(response, len);
+    modbus_send_frame(slave_addr, response, len);
 }
 
 uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc)
