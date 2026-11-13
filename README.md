@@ -14,42 +14,6 @@ Modbusのレジスタ仕様を手でCへ写すと、番地のずれ、型や長�
 
 ![書込み要求の受付・検証・反映・応答・通知と、保存用スナップショット回収の全体像](images/readme/00-generated-handwritten-overview.svg)
 
-<!-- modbus-command-hover:start -->
-<div id="modbus-write-command-hover"></div>
-<script id="modbus-write-command-hover-script">
-(() => {
-  const host = document.getElementById('modbus-write-command-hover');
-  const image = host.previousElementSibling.querySelector('img');
-  if (!image || !image.src.startsWith('data:image/svg+xml;base64,')) return;
-  const bytes = Uint8Array.from(atob(image.src.split(',')[1]), c => c.charCodeAt(0));
-  const parsed = new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'image/svg+xml');
-  if (parsed.querySelector('parsererror')) return;
-  const svg = document.importNode(parsed.documentElement, true);
-  host.appendChild(svg);
-  image.parentElement.hidden = true;
-  const buttons = [...svg.querySelectorAll('button.gate-hotspot')];
-  const popups = [...svg.querySelectorAll('.command-popup')];
-  const show = key => {
-    popups.forEach(popup => {
-      const open = popup.dataset.key === key;
-      popup.classList.toggle('is-open', open);
-      popup.setAttribute('aria-hidden', String(!open));
-    });
-  };
-  buttons.forEach(button => {
-    const key = button.dataset.key;
-    button.addEventListener('pointerenter', () => show(key));
-    button.addEventListener('pointerleave', () => show(null));
-    button.addEventListener('focus', () => show(key));
-    button.addEventListener('blur', () => show(null));
-  });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') show(null); });
-})();
-</script>
-<!-- modbus-command-hover:end -->
-
-GitHubのREADMEでは通常のSVG画像として全体像を表示します。変換したHTMLでは、ひし形にマウスを乗せると、その判定が参照する要求要素を表示します。キーボードでフォーカスした場合も表示し、離れると消えます。
-
 UART受信割込み・Appループ・キューやフラグ・永続化処理は組込み例です。BUSY・単項目検証・組合せ検証・更新通知は、定義で設定した対象へ適用します。保存経路は、変更がありスナップショットを回収できた場合を描いています。
 
 ### 1.2 自動生成と手書きの責務
