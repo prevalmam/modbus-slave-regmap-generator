@@ -614,3 +614,7 @@ node tools/export-json.cjs product.json output-directory
 ```
 
 製品ファームウェアのビルドと実機確認は製品側で行います。
+
+## 8. 開発クレジット
+
+[OpenAI Codex](https://github.com/codex)が、JSON／HTMLエディターとC/H生成機能の実装、公開APIの設計、検証、ドキュメント作成を支援しています。
