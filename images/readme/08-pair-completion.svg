@@ -6,7 +6,7 @@
 <g font-family="Yu Gothic UI, Meiryo, sans-serif" fill="#172d43">
 <text x="26" y="32" font-size="17" fill="#526477" font-weight="400" text-anchor="start">2.7 グループ検証と値の補完</text>
 <text x="26" y="72" font-size="29" fill="#172d43" font-weight="700" text-anchor="start">下限だけを書いても、上限とセットで判定</text>
-<text x="26" y="106" font-size="19" fill="#526477" font-weight="400" text-anchor="start">同じグループ名をExcelで指定。値を揃えて渡す配線は自動生成。</text>
+<text x="26" y="106" font-size="19" fill="#526477" font-weight="400" text-anchor="start">JSONで同じグループ名を指定。値を揃えて渡す配線は自動生成。</text>
 <path d="M26 126 H974" fill="none" stroke="#dbe3eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <rect x="26" y="150" width="435" height="122" rx="12" fill="#eaf2ff" stroke="#5782b6" stroke-width="1.3"/>
 <text x="44" y="179" font-size="16" fill="#234f82" font-weight="700" text-anchor="start">入力 1：今回書き込まれた新しい値</text>

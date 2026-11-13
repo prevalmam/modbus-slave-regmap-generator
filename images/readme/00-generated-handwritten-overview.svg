@@ -1,0 +1,608 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="3304" viewBox="0 0 1440 3304" id="writefull-diagram" role="group" aria-labelledby="writefull-title writefull-desc">
+<title id="writefull-title">一項目の書込み：手書き照会と拒否の全体像</title>
+<desc id="writefull-desc">masterは右の逆C字、slave手書きは左のC字、中央は生成コード。正常経路は中央の縦線。上部は別の実行機会であるUART受信割込みを破線で囲む。受信バッファを介して、Appループが要求を取得し、同じ実行文脈で生成parserを同期呼出しする。下側からのやり取りは右を上向き実線の依頼、左を下向き破線の戻りに揃える。概念図として手書き入口の事前検査を省き、取り出した要求を生成側へ渡す。生成parserはNULL、8バイト未満、256バイト超を無応答で拒否する。CRC一致、対応機能、要求形式を別々の判定に分ける。続いて番地が定義され項目全体が対象か、書込み属性にWがあるか、BUSYではないかを独立した判定に分け、BUSYの判定だけを手書きのBUSY問い合わせ先と一対一で結ぶ。通信要求の判定はYesで下、Noで右へ進む。要求要素の帯は、ひし形にマウスを乗せた間だけ重ねて表示し、参照する欄を濃い枠と太字で強調する。拒否理由と例外応答は常時表示する。帯は0x10の宛先・機能・番地・個数・バイト数・データ・CRCを模式的に並べる。CRCでは本文全体と末尾CRC、属性では項目定義、BUSYでは通信外の手書き状態を参照する。左にアドレス受付、BUSY問い合わせ、単項目検証、組合せ検証、正常時の更新通知を配置。BUSYは手書きが画面や動作状態からその都度回答し、生成側は拒否フラグを保持しない。右は無応答と例外応答に分ける。設定された検証だけを通す模式図であり、実在の一番地が全部を通るという意味ではない。底面は受付、待ち状態、実行の三段。正常応答は青の番号1で送信受付を呼び、番号2で送信キューへコピーし、番号3の破線で生成側へ戻り、番号4で手書きの更新通知受付を呼び、番号5で処理待ちフラグを立てる。例外応答は例外色の番号1で送信受付を呼び、番号2でキューへコピーし、番号3の破線で戻る。送信キューへのコピーは正常色と例外色の別々の線で示す。送信データは送信キューへ、Appの更新通知は処理待ちフラグへ反映される。同期の呼出しは受付関数から戻る。円柱は待ち状態の置き場であり、下段のUART割込みとAppループがそれぞれの実行機会に上向き実線で取得し、下向き破線で結果を受け取る。NVMの概念経路は、別の実行機会の保存ループから緑の番号1で保存対象の回収を依頼し、生成側がレジスタの現在値を参照して保存用の配置へ詰め、保存用スナップショットへ直接コピーする一本道で示す。回収経路のノード接続は上下の辺へ揃え、レジスタの現在値の下辺と詰める処理の上辺で往復し、下側との依頼・格納は詰める処理の下辺へ接続する。緑の番号2でRAM参照、番号3で値の戻り、番号4で保存用スナップショットへの格納を示し、番号5の破線で回収済を返す。その保存データを固定して不揮発ストレージへ保存する。保存媒体と保存方式は手書き側が選ぶ。保存用スナップショット・処理待ちフラグ・送信キューは受け渡しの置き場へまとめ、上の要求処理と下の別の実行機会を分ける。番号札は要求処理を丸、別の実行機会からの一連の処理を角丸四角で区別する。色は青が通常、橙が例外、緑が保存を表し、形の違いと独立させる。図はOUT1等の代表例を示す。</desc>
+<style>#writefull-diagram{color-scheme:light dark;--ink:light-dark(#183044,#e1eaf1);--muted:light-dark(#4b6273,#b4c5d2);--paper:light-dark(#fff,#18232d);--master:light-dark(#f4f1f8,#332c40);--manual:light-dark(#edf2f6,#253543);--generated:light-dark(#eef6f2,#223b32);--line:light-dark(#b9c8d2,#607382);--accent:light-dark(#27644c,#a3d7b8);--focus:light-dark(#d7eadf,#325849);--call:light-dark(#315a78,#a4c9e3);--reject:light-dark(#9a4b22,#e7b58c);font-family:"Yu Gothic UI",Meiryo,sans-serif;font-size:22px;color:var(--ink)}#writefull-diagram text{fill:var(--ink)}#writefull-diagram .small{font-size:18px;fill:var(--muted)}#writefull-diagram .node{fill:var(--paper);stroke:var(--line);stroke-width:1.5}#writefull-diagram .flow{fill:none;stroke:var(--call);stroke-width:2.5;marker-end:url(#writefull-arrow)}#writefull-diagram .return{fill:none;stroke:var(--call);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#writefull-arrow)}#writefull-diagram .reject{fill:none;stroke:var(--reject);stroke-width:2;marker-end:url(#writefull-reject-arrow)}#writefull-diagram .reject-bus{fill:none;stroke:var(--reject);stroke-width:2}#writefull-diagram .packet-cell{fill:var(--paper);stroke:var(--line);stroke-width:1}#writefull-diagram .packet-cell.is-focus{fill:var(--focus);stroke:var(--accent);stroke-width:1.5}#writefull-diagram .packet-label{font-size:16px;fill:var(--muted)}#writefull-diagram .packet-label.is-focus{fill:var(--ink);font-weight:500}#writefull-diagram .packet-note{font-size:16px;fill:var(--ink)}#writefull-diagram .gate-hotspot{width:100%;height:100%;padding:0;border:0;background:transparent;color:inherit;cursor:help;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}#writefull-diagram .command-popup{display:none;pointer-events:none}#writefull-diagram .command-popup.is-open{display:inline}#writefull-diagram .command-popup-surface{fill:var(--paper);stroke:var(--accent);stroke-width:1.5}#writefull-diagram .step-number text{fill:var(--paper);font-size:18px;font-weight:500}#writefull-diagram .legend-number{fill:var(--paper);font-size:18px;font-weight:500}#writefull-diagram .reject-return{fill:none;stroke:var(--reject);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#writefull-reject-arrow)}#writefull-diagram .storage{fill:none;stroke:var(--accent);stroke-width:2;marker-end:url(#writefull-storage-arrow)}#writefull-diagram .storage-return{fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#writefull-storage-arrow)}
+
+#writefull-diagram{display:block;width:100%;height:auto}
+</style>
+<defs><marker id="writefull-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="var(--call)"/></marker><marker id="writefull-reject-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="var(--reject)"/></marker><marker id="writefull-storage-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="var(--accent)"/></marker></defs>
+<text x="24" y="34">一項目の書込み：照会と拒否の全体像</text>
+<text x="1416" y="34" class="small" text-anchor="end">模式図｜設定された検証だけ実行</text>
+<path id="writefull-master" d="M34 56 H1406 A10 10 0 0 1 1416 66 V3238 A10 10 0 0 1 1406 3248 H34 A10 10 0 0 1 24 3238 V3146 A10 10 0 0 1 34 3136 H1354 A10 10 0 0 0 1364 3126 V162 A10 10 0 0 0 1354 152 H34 A10 10 0 0 1 24 142 V66 A10 10 0 0 1 34 56 Z" fill="var(--master)" stroke="var(--line)" stroke-width="1.5"/>
+<path id="writefull-manual" d="M58 164 H1342 A10 10 0 0 1 1352 174 V584 A10 10 0 0 1 1342 594 H330 A10 10 0 0 0 320 604 V2354 A10 10 0 0 0 330 2364 H1342 A10 10 0 0 1 1352 2374 V3114 A10 10 0 0 1 1342 3124 H58 A10 10 0 0 1 48 3114 V174 A10 10 0 0 1 58 164 Z" fill="var(--manual)" stroke="var(--line)" stroke-width="1.5"/>
+<rect id="writefull-generated" x="332" y="606" width="1020" height="1746" rx="10" fill="var(--generated)" stroke="var(--line)" stroke-width="1.5"/>
+<rect id="writefull-rx-shared-state-band" x="58" y="282" width="1274" height="96" fill="var(--paper)" stroke="var(--line)" stroke-width="2"/>
+<rect id="writefull-rx-interrupt-region" x="332" y="176" width="1000" height="94" rx="8" fill="var(--manual)" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="10 7"/>
+<text x="1110" y="318" text-anchor="middle">受け渡しの置き場</text>
+<text x="1110" y="348" class="small" text-anchor="middle">データを保持</text>
+<text x="1110" y="210" text-anchor="middle">別の実行機会</text>
+<text x="1110" y="240" class="small" text-anchor="middle">受信割込み</text>
+<text x="1110" y="428" text-anchor="middle">Appループから処理</text>
+<text x="44" y="101">master</text>
+<text x="96" y="201">slave（手書き）</text>
+<text x="354" y="633">slave（自動生成）</text>
+<text x="900" y="74" class="packet-note">要求の要素（0x10の例）</text>
+<g id="writefull-packet-overview" role="group" aria-label="要求フレームの要素">
+<rect id="writefull-packet-overview-station" x="900" y="82" width="42" height="28" class="packet-cell"/>
+<text x="921.0" y="101" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-packet-overview-function" x="942" y="82" width="42" height="28" class="packet-cell"/>
+<text x="963.0" y="101" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-packet-overview-address" x="984" y="82" width="42" height="28" class="packet-cell"/>
+<text x="1005.0" y="101" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-packet-overview-count" x="1026" y="82" width="42" height="28" class="packet-cell"/>
+<text x="1047.0" y="101" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-packet-overview-bytes" x="1068" y="82" width="74" height="28" class="packet-cell"/>
+<text x="1105.0" y="101" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-packet-overview-data" x="1142" y="82" width="58" height="28" class="packet-cell"/>
+<text x="1171.0" y="101" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-packet-overview-crc" x="1200" y="82" width="42" height="28" class="packet-cell"/>
+<text x="1221.0" y="101" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+<text x="900" y="126" class="packet-note">ひし形にマウスを乗せて参照箇所</text>
+<rect id="writefull-master-send" x="600.0" y="64.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="111.0" text-anchor="middle">書込み要求を送信する</text>
+<path id="writefull-request" d="M720 144 V182" class="flow"/>
+<rect id="writefull-receive" x="600.0" y="182.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="229.0" text-anchor="middle">要求を受信する</text>
+<path id="writefull-rx-store" d="M720 262 V294" class="flow"/>
+<text x="744" y="284" class="small">蓄積</text>
+<g id="writefull-rx-buffer" role="group" aria-label="受信バッファ">
+<path d="M620.0 306 C620.0 290 820.0 290 820.0 306 V354 C820.0 370 620.0 370 620.0 354 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="720" cy="306" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="720" y="339.0" text-anchor="middle">受信バッファ</text>
+</g>
+<path id="writefull-rx-fetch" d="M760 417 V364" class="flow"/>
+<text x="784" y="411" class="small">取り出し</text>
+<path id="writefull-rx-data" d="M680 364 V417" class="return"/>
+<text x="658" y="411" class="small" text-anchor="end">要求</text>
+<rect id="writefull-rx-process" x="600.0" y="417.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="451.0" text-anchor="middle">受信要求を処理する</text>
+<text x="720.0" y="477.0" class="small" text-anchor="middle">Appループから実行</text>
+<path id="writefull-enter" d="M720 497 V629" class="flow"/>
+<text x="744" y="555" class="small">生成側へ渡す</text>
+<g id="writefull-after-receive" transform="translate(0,300)">
+<path id="writefull-parser-entry" d="M720 329 L870 375 L720 421 L570 375 Z" class="node"/>
+<text x="720" y="372" text-anchor="middle">要求を扱える？</text>
+<text x="720" y="397" class="small" text-anchor="middle">ポインタ・長さ</text>
+<foreignObject x="570" y="329" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-parser-entry" aria-label="要求を扱える？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-parser-entry-yes" d="M720 421 V459" class="flow"/>
+<text x="742" y="448" class="small">Yes</text>
+<path id="writefull-parser-unusable" d="M870 375 H1195 V464" class="reject"/>
+<text x="894" y="363" class="small">No</text>
+<text x="1175" y="400" class="small" text-anchor="end">NULLポインタ</text>
+<text x="1175" y="425" class="small" text-anchor="end">8バイト未満</text>
+<text x="1175" y="450" class="small" text-anchor="end">256バイト超</text>
+<g id="writefull-after-parser-entry" transform="translate(0,130)">
+<path id="writefull-address" d="M720 329 L870 375 L720 421 L570 375 Z" class="node"/>
+<text x="720" y="372" text-anchor="middle">自局宛て？</text>
+<text x="720" y="397" class="small" text-anchor="middle">受付結果</text>
+<foreignObject x="570" y="329" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-address" aria-label="自局宛て？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-crc" d="M720 459 L870 505 L720 551 L570 505 Z" class="node"/>
+<text x="720" y="502" text-anchor="middle">CRCは一致？</text>
+<text x="720" y="527" class="small" text-anchor="middle">通信データ</text>
+<foreignObject x="570" y="459" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-crc" aria-label="CRCは一致？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-function" d="M720 589 L870 635 L720 681 L570 635 Z" class="node"/>
+<text x="720" y="632" text-anchor="middle">対応機能？</text>
+<text x="720" y="657" class="small" text-anchor="middle">Function</text>
+<foreignObject x="570" y="589" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-function" aria-label="対応機能？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-format" d="M720 719 L870 765 L720 811 L570 765 Z" class="node"/>
+<text x="720" y="762" text-anchor="middle">形式は適切？</text>
+<text x="720" y="787" class="small" text-anchor="middle">長さ・個数</text>
+<foreignObject x="570" y="719" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-format" aria-label="形式は適切？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-access" d="M720 849 L870 895 L720 941 L570 895 Z" class="node"/>
+<text x="720" y="892" text-anchor="middle">番地は有効？</text>
+<text x="720" y="917" class="small" text-anchor="middle">定義・項目全体</text>
+<foreignObject x="570" y="849" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-access" aria-label="番地は有効？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-writable" d="M720 979 L870 1025 L720 1071 L570 1025 Z" class="node"/>
+<text x="720" y="1022" text-anchor="middle">書込み可能？</text>
+<text x="720" y="1047" class="small" text-anchor="middle">Wのみ／R・W</text>
+<foreignObject x="570" y="979" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-writable" aria-label="書込み可能？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-busy" d="M720 1109 L870 1155 L720 1201 L570 1155 Z" class="node"/>
+<text x="720" y="1152" text-anchor="middle">今は受付可能？</text>
+<text x="720" y="1177" class="small" text-anchor="middle">BUSY照会結果</text>
+<foreignObject x="570" y="1109" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-busy" aria-label="今は受付可能？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-candidate" d="M720 1239 L870 1285 L720 1331 L570 1285 Z" class="node"/>
+<text x="720" y="1282" text-anchor="middle">候補値は妥当？</text>
+<text x="720" y="1307" class="small" text-anchor="middle">型・範囲・enum</text>
+<foreignObject x="570" y="1239" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-candidate" aria-label="候補値は妥当？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-single" d="M720 1369 L870 1415 L720 1461 L570 1415 Z" class="node"/>
+<text x="720" y="1412" text-anchor="middle">単項目は妥当？</text>
+<text x="720" y="1437" class="small" text-anchor="middle">設定時のみ</text>
+<foreignObject x="570" y="1369" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-single" aria-label="単項目は妥当？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-group" d="M720 1499 L870 1545 L720 1591 L570 1545 Z" class="node"/>
+<text x="720" y="1542" text-anchor="middle">組合せは妥当？</text>
+<text x="720" y="1567" class="small" text-anchor="middle">関連値を含む</text>
+<foreignObject x="570" y="1499" width="300" height="92"><button xmlns="http://www.w3.org/1999/xhtml" type="button" class="gate-hotspot" data-key="writefull-group" aria-label="組合せは妥当？：参照するコマンド要素を表示"></button></foreignObject>
+<path id="writefull-ok-address" d="M720 421 V459" class="flow"/>
+<text x="742" y="448" class="small">Yes</text>
+<path id="writefull-ok-crc" d="M720 551 V589" class="flow"/>
+<text x="742" y="578" class="small">Yes</text>
+<path id="writefull-ok-function" d="M720 681 V719" class="flow"/>
+<text x="742" y="708" class="small">Yes</text>
+<path id="writefull-ok-format" d="M720 811 V849" class="flow"/>
+<text x="742" y="838" class="small">Yes</text>
+<path id="writefull-ok-access" d="M720 941 V979" class="flow"/>
+<text x="742" y="968" class="small">Yes</text>
+<path id="writefull-ok-writable" d="M720 1071 V1109" class="flow"/>
+<text x="742" y="1098" class="small">Yes</text>
+<path id="writefull-ok-busy" d="M720 1201 V1239" class="flow"/>
+<text x="742" y="1228" class="small">Yes</text>
+<path id="writefull-ok-candidate" d="M720 1331 V1369" class="flow"/>
+<text x="742" y="1358" class="small">Yes</text>
+<path id="writefull-ok-single" d="M720 1461 V1499" class="flow"/>
+<text x="742" y="1488" class="small">Yes</text>
+<rect id="writefull-address-callback" x="66.0" y="343.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="377.0" text-anchor="middle">アドレス受付</text>
+<text x="186.0" y="403.0" class="small" text-anchor="middle">手書きで判定</text>
+<path id="writefull-address-callback-call" d="M570 375 H306" class="flow"/>
+<path id="writefull-address-callback-return" d="M306 397 H642" class="return"/>
+<text x="430" y="421" class="small" text-anchor="middle">可／拒否</text>
+<rect id="writefull-single-callback" x="66.0" y="1383.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="1417.0" text-anchor="middle">単項目を検証する</text>
+<text x="186.0" y="1443.0" class="small" text-anchor="middle">現在値・候補のコピー</text>
+<path id="writefull-single-callback-call" d="M570 1415 H306" class="flow"/>
+<path id="writefull-single-callback-return" d="M306 1437 H642" class="return"/>
+<text x="430" y="1461" class="small" text-anchor="middle">可／拒否</text>
+<rect id="writefull-group-callback" x="66.0" y="1513.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="1547.0" text-anchor="middle">組合せを検証する</text>
+<text x="186.0" y="1573.0" class="small" text-anchor="middle">関連項目を含むコピー</text>
+<path id="writefull-group-callback-call" d="M570 1545 H306" class="flow"/>
+<path id="writefull-group-callback-return" d="M306 1567 H642" class="return"/>
+<text x="430" y="1591" class="small" text-anchor="middle">可／拒否</text>
+<rect id="writefull-busy-callback" x="66.0" y="1123.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="1157.0" text-anchor="middle">今BUSYか判定する</text>
+<text x="186.0" y="1183.0" class="small" text-anchor="middle">画面・動作状態を参照</text>
+<path id="writefull-busy-callback-call" d="M570 1155 H306" class="flow"/>
+<path id="writefull-busy-callback-return" d="M306 1177 H642" class="return"/>
+<text x="430" y="1201" class="small" text-anchor="middle">BUSY／非BUSY</text>
+<rect id="writefull-no-reply" x="1075.0" y="334.0" width="240" height="80" rx="8" class="node"/>
+<text x="1195.0" y="381.0" text-anchor="middle">応答せず終了する</text>
+<path id="writefull-foreign-address" d="M870 375 H1075" class="reject"/>
+<text x="959" y="362" class="small" text-anchor="middle">No：対象外</text>
+<path id="writefull-crc-error" d="M870 505 H1280" class="reject"/>
+<text x="905" y="491" class="small">CRC不一致 → 例外0x03</text>
+<text x="892" y="529" class="small">No</text>
+<path id="writefull-function-error" d="M870 635 H1280" class="reject"/>
+<text x="905" y="621" class="small">未対応機能 → 例外0x01</text>
+<text x="892" y="659" class="small">No</text>
+<path id="writefull-format-error" d="M870 765 H1280" class="reject"/>
+<text x="905" y="751" class="small">長さ・個数の不整合 → 例外0x03</text>
+<text x="892" y="789" class="small">No</text>
+<path id="writefull-access-error" d="M870 895 H1280" class="reject"/>
+<text x="905" y="855" class="small">未定義・予約／項目の一部</text>
+<text x="905" y="881" class="small">→ 例外0x02</text>
+<text x="892" y="919" class="small">No</text>
+<path id="writefull-writable-error" d="M870 1025 H1280" class="reject"/>
+<text x="905" y="1011" class="small">読出し専用（Rのみ） → 例外0x02</text>
+<text x="892" y="1049" class="small">No</text>
+<path id="writefull-busy-error" d="M870 1155 H1280" class="reject"/>
+<text x="905" y="1141" class="small">BUSY → 例外0x06</text>
+<text x="892" y="1179" class="small">No</text>
+<path id="writefull-candidate-error" d="M870 1285 H1280" class="reject"/>
+<text x="905" y="1271" class="small">値不正：03 / 一時領域不足：04</text>
+<text x="892" y="1309" class="small">No</text>
+<path id="writefull-single-error" d="M870 1415 H1280" class="reject"/>
+<text x="905" y="1401" class="small">拒否：02 / 03 / 04 / 06</text>
+<text x="892" y="1439" class="small">No</text>
+<path id="writefull-group-error" d="M870 1545 H1280" class="reject"/>
+<text x="905" y="1531" class="small">拒否：02 / 03 / 04 / 06</text>
+<text x="892" y="1569" class="small">No</text>
+<path id="writefull-error-bus" d="M1280 505 V1769" class="reject-bus"/>
+<g id="writefull-after-busy-stage" transform="translate(0,520)">
+<rect id="writefull-shared-state-band" x="58" y="1576" width="1274" height="104" fill="var(--paper)" stroke="var(--line)" stroke-width="2"/>
+<rect id="writefull-later-execution-region" x="58" y="1692" width="1274" height="462" rx="8" fill="var(--manual)" stroke="var(--line)" stroke-width="1.5" stroke-dasharray="10 7"/>
+<path id="writefull-all-valid" d="M720 1071 V1115" class="flow"/>
+<text x="744" y="1105" class="small">Yes</text>
+<rect id="writefull-commit" x="600.0" y="1115.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="1162.0" text-anchor="middle">RAMへ反映する</text>
+<g id="writefull-ram" role="group" aria-label="レジスタの現在値">
+<path d="M362.0 1136 C362.0 1120 562.0 1120 562.0 1136 V1184 C562.0 1200 362.0 1200 362.0 1184 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="462" cy="1136" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="462" y="1166.0" text-anchor="middle">レジスタの現在値</text>
+<text x="462" y="1185.0" class="small" text-anchor="middle">設定値・測定値など</text>
+</g>
+<path id="writefull-store" d="M600 1155 H562" class="storage"/>
+<g id="writefull-number-legend" role="group" aria-label="番号札の形の凡例">
+<text x="930" y="1128" class="small">番号札の形</text>
+<circle cx="948" cy="1162" r="14" fill="var(--call)"/>
+<text x="948" y="1168" text-anchor="middle" class="legend-number">1</text>
+<text x="974" y="1168" class="small">受信要求の処理</text>
+<rect x="934" y="1186" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="948" y="1206" text-anchor="middle" class="legend-number">1</text>
+<text x="974" y="1206" class="small">別の実行機会からの処理</text>
+</g>
+<path id="writefull-nvm-read-ram" d="M502 1249 V1196" class="storage"/>
+<g id="writefull-nvm-step-2" class="step-number" data-execution="later" role="img" aria-label="手順2">
+<rect x="488" y="1215" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="502" y="1235" text-anchor="middle">2</text>
+</g>
+<path id="writefull-nvm-ram-data" d="M422 1196 V1249" class="storage-return"/>
+<g id="writefull-nvm-step-3" class="step-number" data-execution="later" role="img" aria-label="手順3">
+<rect x="408" y="1202" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="422" y="1222" text-anchor="middle">3</text>
+</g>
+<path id="writefull-to-ack" d="M720 1195 V1249" class="flow"/>
+<g id="writefull-lower-spacing" transform="translate(0,4)">
+<rect id="writefull-nvm-pack" x="342.0" y="1245.0" width="240" height="80" rx="8" class="node"/>
+<text x="462.0" y="1279.0" text-anchor="middle">保存対象を詰める</text>
+<text x="462.0" y="1305.0" class="small" text-anchor="middle">保存用の配置へ</text>
+<path id="writefull-nvm-capture-call" d="M226 1751 V1670 H326 V1352 H502 V1325" class="storage"/>
+<g id="writefull-nvm-step-1" class="step-number" data-execution="later" role="img" aria-label="手順1">
+<rect x="312" y="1486" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="326" y="1506" text-anchor="middle">1</text>
+</g>
+<text x="382" y="1380" class="small">回収</text>
+<path id="writefull-nvm-packed-to-store" d="M422 1325 V1336 H186 V1588" class="storage"/>
+<g id="writefull-nvm-step-4" class="step-number" data-execution="later" role="img" aria-label="手順4">
+<rect x="172" y="1438" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="186" y="1458" text-anchor="middle">4</text>
+</g>
+<text x="164" y="1458" class="small" text-anchor="end">格納</text>
+<rect id="writefull-normal-reply" x="600.0" y="1245.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="1292.0" text-anchor="middle">正常応答を組み立てる</text>
+<rect id="writefull-exception-reply" x="1060.0" y="1245.0" width="240" height="80" rx="8" class="node"/>
+<text x="1180.0" y="1292.0" text-anchor="middle">例外応答を組み立てる</text>
+<path id="writefull-normal-to-send" d="M720 1325 V1441" class="flow"/>
+<g id="writefull-step-1" class="step-number" data-execution="request" role="img" aria-label="手順1">
+<circle cx="720" cy="1404" r="14" fill="var(--call)"/>
+<text x="720" y="1410" text-anchor="middle">1</text>
+</g>
+<text x="744" y="1410" class="small">送信を依頼</text>
+<path id="writefull-send-return" d="M650 1441 V1325" class="return"/>
+<g id="writefull-step-3" class="step-number" data-execution="request" role="img" aria-label="手順3">
+<circle cx="650" cy="1380" r="14" fill="var(--call)"/>
+<text x="650" y="1386" text-anchor="middle">3</text>
+</g>
+<text x="628" y="1410" class="small" text-anchor="end">戻る</text>
+<path id="writefull-notify-call" d="M620 1325 V1374 H470 V1441" class="flow"/>
+<g id="writefull-step-4" class="step-number" data-execution="request" role="img" aria-label="手順4">
+<circle cx="470" cy="1404" r="14" fill="var(--call)"/>
+<text x="470" y="1410" text-anchor="middle">4</text>
+</g>
+<text x="490" y="1434" class="small">Appへ更新通知</text>
+<path id="writefull-exception-to-send" d="M1220 1325 V1492 H840" class="reject"/>
+<g id="writefull-exception-step-1" class="step-number" data-execution="request" role="img" aria-label="手順1">
+<circle cx="1220" cy="1404" r="14" fill="var(--reject)"/>
+<text x="1220" y="1410" text-anchor="middle">1</text>
+</g>
+<text x="1244" y="1410" class="small">送信を依頼</text>
+<path id="writefull-exception-return" d="M840 1470 H1140 V1325" class="reject-return"/>
+<g id="writefull-exception-step-3" class="step-number" data-execution="request" role="img" aria-label="手順3">
+<circle cx="1000" cy="1470" r="14" fill="var(--reject)"/>
+<text x="1000" y="1476" text-anchor="middle">3</text>
+</g>
+<text x="1000" y="1510" class="small" text-anchor="middle">戻る</text>
+<rect id="writefull-send-accept" x="600.0" y="1441.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="1488.0" text-anchor="middle">送信データを受け取る</text>
+<rect id="writefull-notify-accept" x="350.0" y="1441.0" width="240" height="80" rx="8" class="node"/>
+<text x="470.0" y="1488.0" text-anchor="middle">更新通知を受ける</text>
+<path id="writefull-enqueue" d="M712 1521 V1588" class="flow"/>
+<g id="writefull-step-2" class="step-number" data-execution="request" role="img" aria-label="手順2">
+<circle cx="712" cy="1537" r="14" fill="var(--call)"/>
+<text x="712" y="1543" text-anchor="middle">2</text>
+</g>
+<path id="writefull-exception-enqueue" d="M728 1521 V1588" class="reject"/>
+<g id="writefull-exception-step-2" class="step-number" data-execution="request" role="img" aria-label="手順2">
+<circle cx="728" cy="1557" r="14" fill="var(--reject)"/>
+<text x="728" y="1563" text-anchor="middle">2</text>
+</g>
+<text x="758" y="1558" class="small">コピー</text>
+<path id="writefull-pending-set" d="M470 1521 V1588" class="flow"/>
+<g id="writefull-step-5" class="step-number" data-execution="request" role="img" aria-label="手順5">
+<circle cx="470" cy="1547" r="14" fill="var(--call)"/>
+<text x="470" y="1553" text-anchor="middle">5</text>
+</g>
+<text x="494" y="1553" class="small">ON</text>
+<g id="writefull-tx-queue" role="group" aria-label="送信キュー">
+<path d="M620.0 1600 C620.0 1584 820.0 1584 820.0 1600 V1648 C820.0 1664 620.0 1664 620.0 1648 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="720" cy="1600" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="720" y="1633.0" text-anchor="middle">送信キュー</text>
+</g>
+<g id="writefull-app-pending" role="group" aria-label="処理待ちフラグ">
+<path d="M370.0 1600 C370.0 1584 570.0 1584 570.0 1600 V1648 C570.0 1664 370.0 1664 370.0 1648 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="470" cy="1600" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="470" y="1633.0" text-anchor="middle">処理待ちフラグ</text>
+</g>
+<g id="writefull-save-image" role="group" aria-label="保存用スナップショット">
+<path d="M86.0 1600 C86.0 1584 286.0 1584 286.0 1600 V1648 C286.0 1664 86.0 1664 86.0 1648 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="186" cy="1600" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="186" y="1630.0" text-anchor="middle" style="font-size:17px">保存用スナップショット</text>
+<text x="186" y="1649.0" class="small" text-anchor="middle" style="font-size:16px">回収時点の設定値</text>
+</g>
+<text x="1110" y="1608" text-anchor="middle">受け渡しの置き場</text>
+<text x="1110" y="1638" class="small" text-anchor="middle">データ・フラグを保持</text>
+<text x="1110" y="1738" text-anchor="middle">ここから別の実行機会</text>
+<text x="1110" y="1768" class="small" text-anchor="middle">Appループ・送信割込み</text>
+<path id="writefull-tx-dequeue" d="M760 1751 V1658" class="flow"/>
+<g id="writefull-tx-step-1" class="step-number" data-execution="later" role="img" aria-label="手順1">
+<rect x="746" y="1704" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="760" y="1724" text-anchor="middle">1</text>
+</g>
+<text x="784" y="1746" class="small">取り出し</text>
+<path id="writefull-tx-data" d="M680 1658 V1751" class="return"/>
+<g id="writefull-tx-step-2" class="step-number" data-execution="later" role="img" aria-label="手順2">
+<rect x="666" y="1704" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="680" y="1724" text-anchor="middle">2</text>
+</g>
+<text x="658" y="1746" class="small" text-anchor="end">データ</text>
+<path id="writefull-pending-take" d="M510 1751 V1658" class="flow"/>
+<g id="writefull-app-step-1" class="step-number" data-execution="later" role="img" aria-label="手順1">
+<rect x="496" y="1704" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="510" y="1724" text-anchor="middle">1</text>
+</g>
+<text x="534" y="1721" class="small">確認</text>
+<text x="534" y="1743" class="small">クリア</text>
+<path id="writefull-pending-result" d="M430 1658 V1751" class="return"/>
+<g id="writefull-app-step-2" class="step-number" data-execution="later" role="img" aria-label="手順2">
+<rect x="416" y="1704" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="430" y="1724" text-anchor="middle">2</text>
+</g>
+<text x="408" y="1740" class="small" text-anchor="end">有無</text>
+<rect id="writefull-uart-send" x="600.0" y="1751.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="1785.0" text-anchor="middle">UARTで送信する</text>
+<text x="720.0" y="1811.0" class="small" text-anchor="middle">送信割込みで継続</text>
+<rect id="writefull-app-process" x="350.0" y="1751.0" width="240" height="80" rx="8" class="node"/>
+<text x="470.0" y="1785.0" text-anchor="middle">Appの後続処理</text>
+<text x="470.0" y="1811.0" class="small" text-anchor="middle">Appループから実行</text>
+<rect id="writefull-nvm-poll" x="66.0" y="1751.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="1785.0" text-anchor="middle">保存ループ</text>
+<text x="186.0" y="1811.0" class="small" text-anchor="middle">Appループ／空き時</text>
+<path id="writefull-nvm-captured-return" d="M146 1658 V1751" class="storage-return"/>
+<g id="writefull-nvm-step-5" class="step-number" data-execution="later" role="img" aria-label="手順5">
+<rect x="132" y="1704" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="146" y="1724" text-anchor="middle">5</text>
+</g>
+<text x="190" y="1739" class="small" text-anchor="middle">回収済</text>
+<path id="writefull-nvm-start-save" d="M186 1831 V1897" class="storage"/>
+<g id="writefull-nvm-step-6" class="step-number" data-execution="later" role="img" aria-label="手順6">
+<rect x="172" y="1844" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="186" y="1864" text-anchor="middle">6</text>
+</g>
+<text x="210" y="1868" class="small">同じRAMを使用</text>
+<rect id="writefull-nvm-save" x="66.0" y="1897.0" width="240" height="80" rx="8" class="node"/>
+<text x="186.0" y="1944.0" text-anchor="middle">設定を永続化する</text>
+<path id="writefull-save-to-flash" d="M186 1977 V2020" class="storage"/>
+<g id="writefull-nvm-step-7" class="step-number" data-execution="later" role="img" aria-label="手順7">
+<rect x="172" y="1978" width="28" height="28" rx="3" fill="var(--accent)"/>
+<text x="186" y="1998" text-anchor="middle">7</text>
+</g>
+<g id="writefull-flash" role="group" aria-label="不揮発ストレージ">
+<path d="M86.0 2032 C86.0 2016 286.0 2016 286.0 2032 V2080 C286.0 2096 86.0 2096 86.0 2080 Z" fill="var(--paper)" stroke="var(--accent)" stroke-width="1.5"/>
+<ellipse cx="186" cy="2032" rx="100.0" ry="12" fill="var(--generated)" stroke="var(--accent)" stroke-width="1.5"/>
+<text x="186" y="2065.0" text-anchor="middle">不揮発ストレージ</text>
+</g>
+<path id="writefull-reply" d="M720 1831 V2202" class="flow"/>
+<g id="writefull-tx-step-3" class="step-number" data-execution="later" role="img" aria-label="手順3">
+<rect x="706" y="1994" width="28" height="28" rx="3" fill="var(--call)"/>
+<text x="720" y="2014" text-anchor="middle">3</text>
+</g>
+<text x="744" y="2192" class="small">正常／例外応答</text>
+<text x="44" y="2252">master</text>
+<rect id="writefull-master-receive" x="600.0" y="2202.0" width="240" height="80" rx="8" class="node"/>
+<text x="720.0" y="2249.0" text-anchor="middle">応答を受信する</text>
+<text x="24" y="2328" class="small">番号は経路ごと｜丸：要求処理　角丸四角：別の実行機会　青：通常　橙：例外　緑：保存</text>
+</g>
+</g>
+</g>
+</g>
+<g id="writefull-popup-parser-entry" class="command-popup" data-key="writefull-parser-entry" aria-hidden="true">
+<rect x="530" y="637" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-parser-entry" role="group" aria-label="参照：要求全体の長さ・ポインタ">
+<text x="549" y="662" class="packet-note">参照：要求全体の長さ・ポインタ</text>
+<rect id="writefull-focus-parser-entry-station" x="549" y="674" width="42" height="28" class="packet-cell is-focus"/>
+<text x="570.0" y="693" text-anchor="middle" class="packet-label is-focus">宛先</text>
+<rect id="writefull-focus-parser-entry-function" x="591" y="674" width="42" height="28" class="packet-cell is-focus"/>
+<text x="612.0" y="693" text-anchor="middle" class="packet-label is-focus">機能</text>
+<rect id="writefull-focus-parser-entry-address" x="633" y="674" width="42" height="28" class="packet-cell is-focus"/>
+<text x="654.0" y="693" text-anchor="middle" class="packet-label is-focus">番地</text>
+<rect id="writefull-focus-parser-entry-count" x="675" y="674" width="42" height="28" class="packet-cell is-focus"/>
+<text x="696.0" y="693" text-anchor="middle" class="packet-label is-focus">個数</text>
+<rect id="writefull-focus-parser-entry-bytes" x="717" y="674" width="74" height="28" class="packet-cell is-focus"/>
+<text x="754.0" y="693" text-anchor="middle" class="packet-label is-focus">バイト数</text>
+<rect id="writefull-focus-parser-entry-data" x="791" y="674" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="693" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-parser-entry-crc" x="849" y="674" width="42" height="28" class="packet-cell is-focus"/>
+<text x="870.0" y="693" text-anchor="middle" class="packet-label is-focus">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-address" class="command-popup" data-key="writefull-address" aria-hidden="true">
+<rect x="530" y="767" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-address" role="group" aria-label="参照：要求の宛先">
+<text x="549" y="792" class="packet-note">参照：要求の宛先</text>
+<rect id="writefull-focus-address-station" x="549" y="804" width="42" height="28" class="packet-cell is-focus"/>
+<text x="570.0" y="823" text-anchor="middle" class="packet-label is-focus">宛先</text>
+<rect id="writefull-focus-address-function" x="591" y="804" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="823" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-address-address" x="633" y="804" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="823" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-address-count" x="675" y="804" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="823" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-address-bytes" x="717" y="804" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="823" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-address-data" x="791" y="804" width="58" height="28" class="packet-cell"/>
+<text x="820.0" y="823" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-focus-address-crc" x="849" y="804" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="823" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-crc" class="command-popup" data-key="writefull-crc" aria-hidden="true">
+<rect x="530" y="897" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-crc" role="group" aria-label="本文から計算し、CRCと照合">
+<text x="549" y="922" class="packet-note">本文から計算し、CRCと照合</text>
+<rect id="writefull-focus-crc-station" x="549" y="934" width="42" height="28" class="packet-cell is-focus"/>
+<text x="570.0" y="953" text-anchor="middle" class="packet-label is-focus">宛先</text>
+<rect id="writefull-focus-crc-function" x="591" y="934" width="42" height="28" class="packet-cell is-focus"/>
+<text x="612.0" y="953" text-anchor="middle" class="packet-label is-focus">機能</text>
+<rect id="writefull-focus-crc-address" x="633" y="934" width="42" height="28" class="packet-cell is-focus"/>
+<text x="654.0" y="953" text-anchor="middle" class="packet-label is-focus">番地</text>
+<rect id="writefull-focus-crc-count" x="675" y="934" width="42" height="28" class="packet-cell is-focus"/>
+<text x="696.0" y="953" text-anchor="middle" class="packet-label is-focus">個数</text>
+<rect id="writefull-focus-crc-bytes" x="717" y="934" width="74" height="28" class="packet-cell is-focus"/>
+<text x="754.0" y="953" text-anchor="middle" class="packet-label is-focus">バイト数</text>
+<rect id="writefull-focus-crc-data" x="791" y="934" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="953" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-crc-crc" x="849" y="934" width="42" height="28" class="packet-cell is-focus"/>
+<text x="870.0" y="953" text-anchor="middle" class="packet-label is-focus">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-function" class="command-popup" data-key="writefull-function" aria-hidden="true">
+<rect x="530" y="1027" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-function" role="group" aria-label="参照：機能コード">
+<text x="549" y="1052" class="packet-note">参照：機能コード</text>
+<rect id="writefull-focus-function-station" x="549" y="1064" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1083" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-function-function" x="591" y="1064" width="42" height="28" class="packet-cell is-focus"/>
+<text x="612.0" y="1083" text-anchor="middle" class="packet-label is-focus">機能</text>
+<rect id="writefull-focus-function-address" x="633" y="1064" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="1083" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-function-count" x="675" y="1064" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1083" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-function-bytes" x="717" y="1064" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1083" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-function-data" x="791" y="1064" width="58" height="28" class="packet-cell"/>
+<text x="820.0" y="1083" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-focus-function-crc" x="849" y="1064" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1083" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-format" class="command-popup" data-key="writefull-format" aria-hidden="true">
+<rect x="530" y="1157" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-format" role="group" aria-label="参照：機能・個数・データ長">
+<text x="549" y="1182" class="packet-note">参照：機能・個数・データ長</text>
+<rect id="writefull-focus-format-station" x="549" y="1194" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1213" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-format-function" x="591" y="1194" width="42" height="28" class="packet-cell is-focus"/>
+<text x="612.0" y="1213" text-anchor="middle" class="packet-label is-focus">機能</text>
+<rect id="writefull-focus-format-address" x="633" y="1194" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="1213" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-format-count" x="675" y="1194" width="42" height="28" class="packet-cell is-focus"/>
+<text x="696.0" y="1213" text-anchor="middle" class="packet-label is-focus">個数</text>
+<rect id="writefull-focus-format-bytes" x="717" y="1194" width="74" height="28" class="packet-cell is-focus"/>
+<text x="754.0" y="1213" text-anchor="middle" class="packet-label is-focus">バイト数</text>
+<rect id="writefull-focus-format-data" x="791" y="1194" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="1213" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-format-crc" x="849" y="1194" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1213" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-access" class="command-popup" data-key="writefull-access" aria-hidden="true">
+<rect x="530" y="1287" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-access" role="group" aria-label="参照：番地・個数＋項目定義">
+<text x="549" y="1312" class="packet-note">参照：番地・個数＋項目定義</text>
+<rect id="writefull-focus-access-station" x="549" y="1324" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1343" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-access-function" x="591" y="1324" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1343" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-access-address" x="633" y="1324" width="42" height="28" class="packet-cell is-focus"/>
+<text x="654.0" y="1343" text-anchor="middle" class="packet-label is-focus">番地</text>
+<rect id="writefull-focus-access-count" x="675" y="1324" width="42" height="28" class="packet-cell is-focus"/>
+<text x="696.0" y="1343" text-anchor="middle" class="packet-label is-focus">個数</text>
+<rect id="writefull-focus-access-bytes" x="717" y="1324" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1343" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-access-data" x="791" y="1324" width="58" height="28" class="packet-cell"/>
+<text x="820.0" y="1343" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-focus-access-crc" x="849" y="1324" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1343" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-writable" class="command-popup" data-key="writefull-writable" aria-hidden="true">
+<rect x="530" y="1417" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-writable" role="group" aria-label="番地 → 項目定義のR／W">
+<text x="549" y="1442" class="packet-note">番地 → 項目定義のR／W</text>
+<rect id="writefull-focus-writable-station" x="549" y="1454" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1473" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-writable-function" x="591" y="1454" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1473" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-writable-address" x="633" y="1454" width="42" height="28" class="packet-cell is-focus"/>
+<text x="654.0" y="1473" text-anchor="middle" class="packet-label is-focus">番地</text>
+<rect id="writefull-focus-writable-count" x="675" y="1454" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1473" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-writable-bytes" x="717" y="1454" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1473" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-writable-data" x="791" y="1454" width="58" height="28" class="packet-cell"/>
+<text x="820.0" y="1473" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-focus-writable-crc" x="849" y="1454" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1473" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-busy" class="command-popup" data-key="writefull-busy" aria-hidden="true">
+<rect x="530" y="1547" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-busy" role="group" aria-label="番地 → 手書きの状態（通信外）">
+<text x="549" y="1572" class="packet-note">番地 → 手書きの状態（通信外）</text>
+<rect id="writefull-focus-busy-station" x="549" y="1584" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1603" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-busy-function" x="591" y="1584" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1603" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-busy-address" x="633" y="1584" width="42" height="28" class="packet-cell is-focus"/>
+<text x="654.0" y="1603" text-anchor="middle" class="packet-label is-focus">番地</text>
+<rect id="writefull-focus-busy-count" x="675" y="1584" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1603" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-busy-bytes" x="717" y="1584" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1603" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-busy-data" x="791" y="1584" width="58" height="28" class="packet-cell"/>
+<text x="820.0" y="1603" text-anchor="middle" class="packet-label">データ</text>
+<rect id="writefull-focus-busy-crc" x="849" y="1584" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1603" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-candidate" class="command-popup" data-key="writefull-candidate" aria-hidden="true">
+<rect x="530" y="1677" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-candidate" role="group" aria-label="参照：データ＋型・範囲の定義">
+<text x="549" y="1702" class="packet-note">参照：データ＋型・範囲の定義</text>
+<rect id="writefull-focus-candidate-station" x="549" y="1714" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1733" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-candidate-function" x="591" y="1714" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1733" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-candidate-address" x="633" y="1714" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="1733" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-candidate-count" x="675" y="1714" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1733" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-candidate-bytes" x="717" y="1714" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1733" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-candidate-data" x="791" y="1714" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="1733" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-candidate-crc" x="849" y="1714" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1733" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-single" class="command-popup" data-key="writefull-single" aria-hidden="true">
+<rect x="530" y="1807" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-single" role="group" aria-label="参照：候補値・現在値のコピー">
+<text x="549" y="1832" class="packet-note">参照：候補値・現在値のコピー</text>
+<rect id="writefull-focus-single-station" x="549" y="1844" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1863" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-single-function" x="591" y="1844" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1863" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-single-address" x="633" y="1844" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="1863" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-single-count" x="675" y="1844" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1863" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-single-bytes" x="717" y="1844" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1863" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-single-data" x="791" y="1844" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="1863" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-single-crc" x="849" y="1844" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1863" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+<g id="writefull-popup-group" class="command-popup" data-key="writefull-group" aria-hidden="true">
+<rect x="530" y="1937" width="380" height="76" rx="8" class="command-popup-surface"/>
+<g id="writefull-focus-group" role="group" aria-label="参照：候補値＋関連RAM値">
+<text x="549" y="1962" class="packet-note">参照：候補値＋関連RAM値</text>
+<rect id="writefull-focus-group-station" x="549" y="1974" width="42" height="28" class="packet-cell"/>
+<text x="570.0" y="1993" text-anchor="middle" class="packet-label">宛先</text>
+<rect id="writefull-focus-group-function" x="591" y="1974" width="42" height="28" class="packet-cell"/>
+<text x="612.0" y="1993" text-anchor="middle" class="packet-label">機能</text>
+<rect id="writefull-focus-group-address" x="633" y="1974" width="42" height="28" class="packet-cell"/>
+<text x="654.0" y="1993" text-anchor="middle" class="packet-label">番地</text>
+<rect id="writefull-focus-group-count" x="675" y="1974" width="42" height="28" class="packet-cell"/>
+<text x="696.0" y="1993" text-anchor="middle" class="packet-label">個数</text>
+<rect id="writefull-focus-group-bytes" x="717" y="1974" width="74" height="28" class="packet-cell"/>
+<text x="754.0" y="1993" text-anchor="middle" class="packet-label">バイト数</text>
+<rect id="writefull-focus-group-data" x="791" y="1974" width="58" height="28" class="packet-cell is-focus"/>
+<text x="820.0" y="1993" text-anchor="middle" class="packet-label is-focus">データ</text>
+<rect id="writefull-focus-group-crc" x="849" y="1974" width="42" height="28" class="packet-cell"/>
+<text x="870.0" y="1993" text-anchor="middle" class="packet-label">CRC</text>
+</g>
+</g>
+</svg>

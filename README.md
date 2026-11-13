@@ -1,820 +1,652 @@
-# modbus-slave-regmap-generator
+# Modbus Slave Register Map Editor
 
-**modbus-slave-regmap-generator** は，Modbus スレーブ側のレジスタマップ仕様書（Excel）から，
+JSONでレジスタを定義し、単体HTMLからModbus slave用のC/Hを生成するツールです。レジスタ表の編集から、通信の解析・検証・現在値の管理・応答生成・更新通知までを、一つの定義からつなぎます。
 
-- send/request フレーム生成用関数
-- reply フレームの parse ＋値チェック処理
-- レジスタアクセス用 getter/setter 関数
-- 正常なMaster write／内部setter成立後の同期callback
+## 1. なぜ作ったか
 
-といった，Modbus 通信まわりの定型コード一式を自動生成するツールです。
+Modbusのレジスタ仕様を手でCへ写すと、番地のずれ、型や長さの取り違え、値域の不一致、応答のバイト数やCRCの誤りが入り込みます。設定を増やすたびに、getter／setterや書込み後の処理も追従させる必要があります。
 
-## ブラウザ用レジスタエディター（試作）
+このツールの目的は、**レジスタ定義を唯一の正本にすること**です。JSONを修正して再生成すれば、レジスタ表、アクセサ、通信処理、検証や通知への配線が同じ定義へ揃います。アプリケーション側は、運転状態の判断、ハードウェア操作、保存方式など、その製品で決める処理に集中できます。
 
-配布用の [modbus-regmap-editor.html](modbus-regmap-editor.html) をブラウザで開くと、レジスタの編集、JSON保存、C/H一括生成が使えます。生成内容はファイルごとに確認し、C/H一式をZIPで保存できます。
+### 1.1 生成コードと手書きコードの全体像
 
-ChromeまたはEdgeでは「HTMLに上書き保存」か Ctrl+S で、編集中のデータをHTMLに保存できます。初回は保存先を選び、同じタブでの次回以降は同じファイルに上書きします。保存したHTMLを開くと入力途中から再開できます。JSONとC/Hの出力時には入力を検証します。
+要求の受付から、書込みの検証、現在値への反映、応答、更新通知、保存用スナップショットの回収までを、一つの定義からつなぎます。次の図は、一項目の書込みを例に、自動生成する処理と手書き側の窓口をまとめたものです。
 
-列挙型は「列挙型」タブで登録し、配列長1の `uint16_t` レジスタの詳細から指定します。JSON v3では、`enums` に型と選択肢、各レジスタの `valueDomain` に型の参照と初期値を保存します。旧版JSONと `RegisterTable.json` の数値は数値範囲として読み込みます。
+![書込み要求の受付・検証・反映・応答・通知と、保存用スナップショット回収の全体像](images/readme/00-generated-handwritten-overview.svg)
 
-列挙型を登録すると `modbus_reg_enums_slave.c/.h` も同じZIPに入ります。列挙型を指定したレジスタのgetterは出力引数、setterは値引数で列挙型を受け取り、どちらも成功時に `1`、失敗時に `0` を返します。Modbus通信とNVMへの書き込みには、登録した `uint16_t` の値を使います。
+<!-- modbus-command-hover:start -->
+<div id="modbus-write-command-hover"></div>
+<script id="modbus-write-command-hover-script">
+(() => {
+  const host = document.getElementById('modbus-write-command-hover');
+  const image = host.previousElementSibling.querySelector('img');
+  if (!image || !image.src.startsWith('data:image/svg+xml;base64,')) return;
+  const bytes = Uint8Array.from(atob(image.src.split(',')[1]), c => c.charCodeAt(0));
+  const parsed = new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'image/svg+xml');
+  if (parsed.querySelector('parsererror')) return;
+  const svg = document.importNode(parsed.documentElement, true);
+  host.appendChild(svg);
+  image.parentElement.hidden = true;
+  const buttons = [...svg.querySelectorAll('button.gate-hotspot')];
+  const popups = [...svg.querySelectorAll('.command-popup')];
+  const show = key => {
+    popups.forEach(popup => {
+      const open = popup.dataset.key === key;
+      popup.classList.toggle('is-open', open);
+      popup.setAttribute('aria-hidden', String(!open));
+    });
+  };
+  buttons.forEach(button => {
+    const key = button.dataset.key;
+    button.addEventListener('pointerenter', () => show(key));
+    button.addEventListener('pointerleave', () => show(null));
+    button.addEventListener('focus', () => show(key));
+    button.addEventListener('blur', () => show(null));
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') show(null); });
+})();
+</script>
+<!-- modbus-command-hover:end -->
 
-列挙型で `WRITE_CHECK` を有効にすると、Modbus書き込み時に、現在値と要求値を列挙型に変換して製品側のコールバックを呼びます。要求値が未定義なら `0x03`、RAMの現在値が未定義なら `0x04` を返します。起動時のサンプルでは `OperationStatus` がこの設定です。
+GitHubのREADMEでは通常のSVG画像として全体像を表示します。変換したHTMLでは、ひし形にマウスを乗せると、その判定が参照する要求要素を表示します。キーボードでフォーカスした場合も表示し、離れると消えます。
 
-列挙型を含む `GROUP_VALIDATE` には、そのグループの項目だけを持つ構造体を生成します。判定関数には仮更新後の値を渡し、列挙型のメンバーには変換済みの値を格納します。判定に使うRAMの値が未定義なら `0x04` を返します。起動時のサンプルでは `serial_settings` がこの例です。
+UART受信割込み・Appループ・キューやフラグ・永続化処理は組込み例です。BUSY・単項目検証・組合せ検証・更新通知は、定義で設定した対象へ適用します。保存経路は、変更がありスナップショットを回収できた場合を描いています。
 
-開発元は [src/editor](src/editor/) のTypeScriptとHTMLひな型です。Node.jsとnpmを使って、リポジトリのルートで実行します。
+### 1.2 自動生成と手書きの責務
+
+| 領域 | 自動生成すること | 手書き側で決めること |
+|---|---|---|
+| 通信 | 受信済みRTUフレームの解析、CRC検査、正常／例外応答の組立て | 受信ドライバ、フレーム完成の判定、送信キュー、物理送信 |
+| 宛先 | 要求ごとに受付可否を問い合わせる | 固定番地、設定値、複数宛先などの受付条件 |
+| 値 | 型・値域・enum・文字列の検査、レジスタの現在値、名前付きアクセサ | 測定値をいつ更新するか、設定値をどう利用するか |
+| 書込みの採否 | BUSY・単項目・グループ検証の呼出しと例外応答 | 編集中かどうか、状態遷移や項目の組合せが妥当か |
+| 更新後の処理 | 正常な書込み／setterから同期コールバックを呼ぶ | RTC反映、動作要求、後続処理のフラグやキュー |
+| 永続化 | 保存要通知、保存用スナップショットの回収、復元時の値検査 | 保存媒体、物理番地、保存方式、完了・失敗・再試行 |
+
+生成コードは、呼び出した側の実行文脈で動きます。受信割込みからバッファへ蓄え、Appループからparserを呼ぶ構成は組込み例の一つです。実行機会の分離や排他は利用側で設計します。
+
+## 2. 利用シナリオ
+
+ここでは、JSON定義から生成できる代表的な利用シナリオを紹介します。図のオレンジは自動生成、緑はアプリ実装を表します。レジスタ名や設定値は各シナリオの説明用です。
+
+### 2.1 定型的な通信処理を代行する
+
+Masterから書込み要求を受信した場合、実機の処理は次の流れになります。
+
+1. 手書き側がUARTなどで受信し、完成したRTUフレームを渡す。
+2. 生成parserが宛先・CRC・機能・番地・権限・値を確認する。
+3. 書込み全体の検証に成功したら、レジスタの現在値へ反映する。
+4. 正常応答、または拒否理由に応じた例外応答を組み立てる。
+5. 手書きの送信口へフレームを渡す。
+
+![受信・検証・応答生成・送信の責任分担](images/readme/01-receive-and-reply.svg)
+
+バイト列と定義の照合は生成側、物理的な受信・送信は手書き側の責務です。保存対象の値が変化すると保存要通知が立ち、利用側が後からスナップショットを回収できます。
+
+### 2.2 「通してよいか」をアプリに問い合わせる
+
+運転要求を、1＝停止、2＝測定、3＝校正とします。測定から校正への直接遷移を拒否し、測定から停止への遷移を受け付けたい場合、値域の検査に加えて現在の運転状態を見る必要があります。
+
+レジスタの詳細で`writeCheck`を有効にすると、生成parserが現在値と候補値を`modbus_user_write_check_<name>()`へ渡します。手書き側は遷移の可否を返し、生成側がRAM反映と正常／例外応答を担当します。
+
+![測定中の校正要求を拒否する流れ](images/readme/02-write-check-reject.svg)
+
+![測定中の停止要求を受理する流れ](images/readme/03-write-check-accept.svg)
+
+### 2.3 編集中の項目への書込みを拒否する
+
+画面で時刻を編集中は、通信側から同じ時刻を上書きされたくないことがあります。`busyReject`を有効にすると、生成parserが書込み要求ごとに`modbus_user_is_busy_<name>()`を同期で呼びます。
+
+手書き側は現在の画面や動作状態を見て、受付可能なら`MB_FALSE`、BUSYなら`MB_TRUE`を返します。生成側はBUSYを例外`0x06`として返します。編集状態は手書き側が持ち、問い合わせのたびに回答します。
+
+![時刻編集中のBUSY問い合わせと書込み再開](images/readme/04-busy-window.svg)
+
+BUSYは受付時点の状態、`writeCheck`は現在値と候補値を含めた内容の妥当性、という役割分担です。
+
+### 2.4 通信と画面操作から同じ後続処理へつなぐ
+
+時刻が書き込まれたら、RTCにも反映したいとします。通信からの書込みと、画面操作からの生成setterの両方を同じ処理へつなぐには、`updateNotify`を有効にします。
+
+生成側が`modbus_user_<name>_updated(source)`を呼びます。`source`でMaster writeと内部setterを区別でき、同じ値を設定した場合も正常な操作として通知します。
+
+![Masterと内部setterから同じRTC処理への合流](images/readme/05-update-callback.svg)
+
+図のRTC処理は後続処理の役割を示します。実機では、コールバックで処理待ちフラグを立て、AppループからRTC操作を進める構成にもできます。
+
+### 2.5 上限と下限をまとめて検証する
+
+警報下限`AL_LOW`と警報上限`AL_HIGH`は、それぞれが範囲内でも、組合せとして`AL_LOW <= AL_HIGH`である必要があります。
+
+両方の`groupValidate`に同じグループ名を指定すると、生成側が書込み後の候補値を専用構造体へ揃え、`modbus_user_group_validate_<group>()`へ渡します。手書き側は値同士の関係を判定します。
+
+![警報上限値と下限値を組み合わせた検証](images/readme/06-pair-validation.svg)
+
+### 2.6 複数項目を一つの日時として検証する
+
+年・月・日・時・分・秒を同じ`groupValidate`へ所属させると、6項目を揃えて検証できます。たとえば2月30日は、月と日それぞれの値域に入っていても、実在する日時として拒否できます。
+
+![年・月・日・時・分・秒を揃えた日時検証](images/readme/07-datetime-validation.svg)
+
+### 2.7 一部だけ書かれても、現在値で補完する
+
+`AL_HIGH=100`、`AL_LOW=20`のとき、Masterが下限だけを30へ更新するとします。グループ検証へは、新しい下限30と、現在の上限100を組み合わせて渡します。
+
+手書き側は、今回どちらが書かれたかに関係なく、揃った値で同じ検証を行えます。
+
+![下限の新しい値と現在の上限値を組み合わせた検証](images/readme/08-pair-completion.svg)
+
+### 2.8 日時の一部だけを書いた場合も補完する
+
+「分」だけを42へ更新する要求でも、年・月・日・時・秒は現在値から補完します。検査関数は、反映予定の日時全体を一つの専用構造体として受け取ります。
+
+![分の新しい値と現在のほか5項目を組み合わせた検証](images/readme/09-datetime-completion.svg)
+
+### 2.9 拒否・検証・反映・通知を組み合わせる
+
+時刻書込みなら、編集状態へのBUSY問い合わせ、各項目の値域検査、日時全体の検証、RAM反映、正常応答の送信依頼、更新通知という順序になります。
+
+![時刻書込みの拒否・検証・RAM反映・RTC更新の全体フロー](images/readme/10-write-end-to-end.svg)
+
+手書き側は、編集状態への回答、日時の妥当性判定、RTCへの反映を担当します。正常応答の送信依頼後に更新コールバックへ進むため、UART設定変更や再起動などは、利用側で物理送信の完了を確認してから実行します。
+
+## 3. 対象とする環境
+
+| 項目 | 内容 |
+|---|---|
+| エディター | [modbus-regmap-editor.html](modbus-regmap-editor.html)をChromeまたはEdgeで開く |
+| 入力 | JSONのレジスタ定義。単体HTMLへ編集中データを保存することも可能 |
+| 出力 | C89相当のC/H一式をZIPで保存 |
+| 組込み先 | `stdint.h`、生成コードが想定する整数型・32ビットfloat表現を扱えるC環境 |
+| 開発環境 | エディター自体を改訂する場合はNode.jsとnpmを使用 |
+
+生成する通信処理は、CRC付きのModbus RTUフレームを扱います。RS-485のDE／RE制御、UART割込み、RTUの無通信時間によるフレーム区切りなどは、利用側が接続します。
+
+## 4. 使い方
+
+### 4.1 定義の編集と保存
+
+1. [modbus-regmap-editor.html](modbus-regmap-editor.html)をChromeまたはEdgeで開きます。
+2. 「JSONを開く」から製品の定義を読み込みます。起動時のサンプルは操作確認に使えます。
+3. 基本設定でスレーブアドレスとNVMサイズを確認し、必要なら配列長定義・部分初期化グループを編集します。
+4. 「レジスタ」タブで番地、変数名、型、配列長、アクセス属性、値域、Default、NVMオフセットを編集します。
+5. 各行の「詳細」で書込み検証・更新通知・BUSY・グループ検証・部分初期化の所属と説明を設定します。enumやビット定義は専用タブで定義し、レジスタへ割り当てます。
+6. 入力チェックを確認し、「JSONを保存」で定義を保存します。
+7. 「C/H 一括生成」で生成内容を確認し、ZIPを保存します。
+
+「HTMLに上書き保存」またはCtrl+Sでは、編集中データを含むHTMLを保存できます。初回に保存先を選ぶと、同じタブでは以後同じファイルへ上書きできます。そのHTMLを開くと保存した状態から再開できます。
+
+JSONは定義を持ち運ぶための正本、データを含むHTMLはエディターごと編集状態を持ち運ぶ方法として使えます。配布HTMLを更新するときも、製品JSONを保存してから読み込み直せます。
+
+### 4.2 入力チェックと再生成
+
+Modbus番地の占有範囲、NVMの占有範囲、名前の重複、Defaultと値域、参照先のenum・ビット定義・初期化グループなどを検査します。数値は10進数、番地やオフセットなどの整数欄は`0x`始まりの16進数も使用できます。
+
+エラーを解消してから一式を再生成し、製品側の生成ファイルを揃えて更新します。手書きのコールバックは別ファイルに置くと、生成物を交換しながらアプリケーションの処理を維持できます。
+
+## 5. 生成コードの組込み方
+
+### 5.1 全体の流れ
+
+1. 生成されたCをコンパイル対象へ、Hをインクルード対象へ追加する。
+2. 送信口と宛先の受付関数を実装する。
+3. 定義で有効にしたBUSY・検証・更新通知のコールバックを実装する。
+4. 起動時にDefaultを設定し、有効な保存データがあれば復元する。
+5. 受信完了フレームを`modbus_parse_and_reply()`へ渡す。
+6. 内部の値操作は公開getter／setterを使う。
+7. 永続化を使う場合は、保存要通知をポーリングしてスナップショットを回収・保存する。
+
+以下の`product_*`は手書き側の役割を示す仮の関数名です。実際のドライバやサービスへ置き換えてください。
+
+### 5.2 送信口と宛先を接続する
+
+`modbus_parser.h`の宣言に合わせて、次の2関数を実装します。
+
+```c
+#include "modbus_parser.h"
+
+void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length)
+{
+    product_tx_enqueue_copy(frame, length);
+}
+
+uint8_t modbus_user_accept_slave_address(uint8_t address)
+{
+    return address == product_current_slave_address() ? 1U : 0U;
+}
+```
+
+`frame`はCRCを含めて組立て済みです。送信をキューやDMAへ委ねる場合は、この関数から戻るまでに利用側の送信用領域へコピーするか、送信を完了させます。生成側のバッファの寿命は呼出し中として扱います。送信受付、キュー容量、RS-485方向制御、送信完了の管理は利用側が担当します。
+
+宛先の受付は要求ごとに問い合わせます。固定値にも、レジスタの設定値にも、複数の受付番地にも対応できます。基本設定のアドレスから`MODBUS_SLAVE_ADDR`も生成しますが、parserの採否はこの関数の戻り値で決まります。
+
+#### BUSY・単項目検証を接続する
+
+`device_mode`に`busyReject`と`writeCheck`を設定した例です。画面の編集中はBUSY、測定（2）から校正（3）への直接遷移は不正な値として拒否します。
+
+```c
+#include "modbus_reg_write_guard_slave.h"
+
+MB_BOOL modbus_user_is_busy_device_mode(void)
+{
+    return product_is_mode_editing() != 0 ? MB_TRUE : MB_FALSE;
+}
+
+modbus_write_result_t modbus_user_write_check_device_mode(
+    uint16_t current_value, uint16_t new_value)
+{
+    if ((current_value == 2U) && (new_value == 3U))
+    {
+        return MODBUS_WRITE_ILLEGAL_VALUE;
+    }
+    return MODBUS_WRITE_OK;
+}
+```
+
+有効にしたコールバックの宣言は生成ヘッダーに並びます。手書き側は、それぞれの宣言と同じ型・名前で実装します。
+
+### 5.3 起動時のDefaultと保存データの復元
+
+`modbus_reg_load_defaults()`で全項目へDefaultを設定してから、保存データを`modbus_reg_nvm_restore()`へ渡します。保存対象だけが復元され、RAM専用項目はDefaultを保持します。
+
+```c
+#include "modbus_reg_map_slave.h"
+#include "modbus_reg_nvm_slave.h"
+
+static uint8_t s_boot_data[NVM_TOTAL_SIZE];
+
+void product_prepare_registers(void)
+{
+    modbus_nvm_restore_result_t result;
+
+    modbus_reg_load_defaults();
+    if (product_read_saved_settings(s_boot_data, sizeof(s_boot_data)) != 0)
+    {
+        result = modbus_reg_nvm_restore(s_boot_data, sizeof(s_boot_data));
+        product_report_restore_result(result);
+    }
+    else
+    {
+        modbus_reg_nvm_mark_dirty();
+    }
+}
+```
+
+この例は、保存データを取得できなければDefaultを保存対象にする方針です。有効な保存データの判定や読出しエラー時の扱いは、利用側で決めます。`load_defaults()`は起動準備用で、保存要通知を立てません。選択範囲を初期化して保存したい場合は、部分初期化APIを使います。
+
+復元APIは、保存対象の値を型・値域・文字列・enumに従って検査します。不正な項目だけをDefaultへ補修し、ほかの正常な項目は復元します。補修時は`MODBUS_NVM_RESTORE_REPAIRED`を返し、保存要通知を立てます。ログや製品のエラー表示は利用側が行います。
+
+### 5.4 受信済みのフレームを渡す
+
+```c
+void product_handle_received_frame(const uint8_t *frame, uint16_t length)
+{
+    modbus_parse_and_reply(frame, length);
+}
+```
+
+渡すのは宛先からCRCまでを含む一つのRTUフレームです。parserはNULL、8バイト未満、256バイト超の入力を無応答で終了します。宛先の受付後、CRCと機能ごとの要求を検査し、応答が必要な場合は送信口を呼びます。
+
+対応機能は`0x03`（Holding Registers読出し）、`0x06`（単一レジスタ書込み）、`0x08`のサブ機能0（診断エコー）、`0x10`（複数レジスタ書込み）です。製品固有の機能は、手書きの前段で振り分ける構成にできます。
+
+parser・setter・スナップショット回収は、一つの実行文脈から直列に呼ぶ構成を基本とします。受信割込みとAppループを分ける場合は、利用側で受信バッファを介して受け渡します。
+
+### 5.5 getter／setterで値を使う
+
+数値スカラーの例です。以下は`device_mode`を`uint16_t`、`process_value`を`float`で定義した場合です。
+
+```c
+uint16_t mode;
+float value;
+
+mode = get_device_mode();
+value = get_process_value();
+if (set_device_mode(2U) == 0)
+{
+    product_report_invalid_setting();
+}
+```
+
+数値setterの成功は1、失敗は0です。通常の数値項目には`get_<name>_min()`、`get_<name>_max()`、`get_<name>_default()`も生成します。数値配列のgetter／setterはindexを受け取り、Default取得もindexを指定します。
+
+enumのアクセサは型付きです。起動時サンプルのパリティなら、次の形で使えます。
+
+```c
+modbus_parity_t parity;
+
+if (get_ModbusParityBit(&parity) != 0)
+{
+    product_apply_parity(parity);
+}
+(void)set_ModbusParityBit(MODBUS_PARITY_NONE);
+```
+
+内部setterは、通信側の書込み属性とは別に、アプリケーションから現在値を更新する窓口です。通信要求用のBUSY・`writeCheck`・`groupValidate`はparserの検査経路へ適用されます。内部更新時の業務上の採否は、呼出し元で判断します。
+
+### 5.6 更新通知から後続処理へつなぐ
+
+`updateNotify`を有効にした全項目について、`modbus_user_<name>_updated()`を実装します。次は通知対象を`device_mode`とした例です。
+
+```c
+#include "modbus_reg_update_notify_slave.h"
+
+static uint8_t s_mode_update_pending;
+
+void modbus_user_device_mode_updated(modbus_reg_update_source_t source)
+{
+    (void)source;
+    s_mode_update_pending = 1U;
+}
+```
+
+`source`は`MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE`または`MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET`です。通信書込みでは、全対象のRAM反映、正常ACKの送信依頼、項目別の更新通知の順に進みます。複数項目の通知はアドレス昇順です。内部setterでは、正常な更新操作の後、setterが戻る前に通知します。
+
+これは値変化だけの通知ではなく、正常な更新操作の成立通知です。同値write／setでも通知します。保存要通知は保存対象の値変化を扱うため、更新コールバックとは目的が異なります。
+
+通知はparser／setterの呼出し元で同期実行します。時間のかかる処理は、上の例のようにフラグやキューへ渡して進められます。同じ項目のsetterをその通知内で再び呼ぶと再通知へ入るため、循環しない呼出し関係にします。通信設定変更や再起動は、物理送信の完了条件も利用側で管理します。
+
+### 5.7 保存用スナップショットを回収する
+
+`modbus_reg_nvm_slave.h/.c`に以下を生成します。
+
+| API | 動作 |
+|---|---|
+| `modbus_reg_load_defaults()` | 起動準備として全RAMへDefaultを設定する |
+| `modbus_reg_reset_defaults(group)` | 選択グループを初期化し、保存要通知を立てる |
+| `modbus_reg_nvm_mark_dirty()` | 明示的に保存要通知を立てる |
+| `modbus_reg_nvm_capture_if_changed(dst, capacity)` | 保存対象を同期コピーし、成功時に今回分の通知を消費する |
+| `modbus_reg_nvm_restore(src, size)` | 保存データ全体を同期検査・復元し、不正項目をDefaultへ補修する |
+
+呼出し元が`NVM_TOTAL_SIZE`バイト以上のスナップショット領域を持ちます。回収では未使用位置を0xFFで埋め、定義されたNVMオフセットへ各保存対象を配置します。復元は正確な全体サイズを要求し、型・範囲・文字列・列挙値を検査します。補修時は保存要通知が立ちます。
+
+スナップショット領域の確保と保持、不揮発ストレージへの保存、受付・完了・失敗の扱いは製品側が担当します。生成器は同期的なRAMと保存データの受渡し、および変更通知を担当します。これらのAPIは、複合RAM更新の外側で、同じ実行コンテキストから呼びます。
+
+保存処理の一例です。`product_save_is_busy()`は前回の保存中を返し、`product_request_save()`は受け付けた時点で保存中へ移るものとします。
+
+```c
+static uint8_t s_save_snapshot[NVM_TOTAL_SIZE];
+
+void product_save_poll(void)
+{
+    modbus_nvm_capture_result_t result;
+
+    if (product_save_is_busy() != 0)
+    {
+        return;
+    }
+    result = modbus_reg_nvm_capture_if_changed(
+        s_save_snapshot, sizeof(s_save_snapshot));
+    if (result == MODBUS_NVM_CAPTURE_CAPTURED)
+    {
+        if (product_request_save(s_save_snapshot,
+                                 sizeof(s_save_snapshot)) == 0)
+        {
+            modbus_reg_nvm_mark_dirty();
+        }
+    }
+}
+```
+
+回収は呼出し中に完了し、成功したときだけ今回分の保存要通知を消費します。保存中は回収先を固定して保持します。その間にレジスタの現在値が変わると、新しい保存要通知が次回の回収へ残ります。物理的な保存は非同期でも構いません。
+
+この例では保存依頼を受け付けられなかった場合に通知を立て直します。受け付けた後の保存失敗、再試行回数、保存媒体や保存方式は利用側が決めます。保存形式の識別・変換・初期化方針も、製品側で設計します。
+
+## 6. 定義と生成仕様
+
+### 6.1 JSONの構成とレジスタ表
+
+定義JSONは`format: "modbus-slave-regmap"`、`schemaVersion: 5`です。トップレベルに`config`、`lengthDefs`、`enums`、`bitsetDefs`、`resetGroupDefs`、`registers`を保存します。
+
+| 要素 | 役割 |
+|---|---|
+| `config.slaveAddress` | 1〜247。生成する`MODBUS_SLAVE_ADDR`の値。実際の宛先受付は手書き関数で判断 |
+| `config.nvmSize` | 1〜65535バイト。生成する`NVM_TOTAL_SIZE`の値 |
+| `lengthDefs` | `{name, length}`で配列長の名前と値を定義 |
+| `enums` | 複数のレジスタから参照できるenum定義 |
+| `bitsetDefs` | 16／32ビットの名前付きビット定義 |
+| `resetGroupDefs` | 部分初期化のグループ定義 |
+| `registers` | 番地ごとの定義、値の指定、検証・通知・初期化所属 |
+
+各レジスタの主な要素は次のとおりです。
+
+| 要素 | 例 | 意味 |
+|---|---|---|
+| `address` | `1000` | 0〜65535のModbus開始番地 |
+| `name` | `device_mode` | C識別子・アクセサ名・コールバック名の基になる名前 |
+| `type` | `uint16_t` | `uint16_t`／`uint32_t`／`float`／`string`／`reserved` |
+| `length` | `1`、`"NAME_LEN"` | 要素数、文字列の固定長バイト数、予約レジスタ数。通常項目は配列長定義も参照可能 |
+| `access` | `"RW"` | 通信側の`RO`／`RW`／`WO`。予約領域は`"-"` |
+| `valueDomain` | `{kind: "range", min: 0, max: 3, default: 1}` | 数値範囲、enum、ビット、文字列、予約の指定 |
+| `nvmOffset` | `16`、`"-"` | 保存データ先頭からのバイトオフセット。`"-"`はRAM専用 |
+| `updateNotify` | `true` | 正常な通信write／内部setterの成立通知 |
+| `busyReject` | `true` | 通信writeの前に手書きのBUSY状態へ問い合わせる |
+| `writeCheck` | `true` | 通信writeの現在値と候補値を手書き検査へ渡す |
+| `groupValidate` | `"alarms"`、`"-"` | 書込み予定値を揃えて検証するグループ名 |
+| `resetGroups` | `["settings"]` | 部分初期化の所属。複数指定可能 |
+| `unit`／`summary`／`description`／`spec`／`notes` | 説明文字列 | 人間向けの単位、概要、詳細、仕様、備考 |
+
+値域を持つ数値項目のJSON例です。この1件だけでも定義として読み込めます。
+
+```json
+{
+  "format": "modbus-slave-regmap",
+  "schemaVersion": 5,
+  "config": {"slaveAddress": 1, "nvmSize": 256},
+  "lengthDefs": [],
+  "enums": [],
+  "bitsetDefs": [],
+  "resetGroupDefs": [{"id": "settings", "label": "設定"}],
+  "registers": [{
+    "address": 1000,
+    "name": "device_mode",
+    "type": "uint16_t",
+    "length": 1,
+    "access": "RW",
+    "valueDomain": {"kind": "range", "min": 0, "max": 3, "default": 1},
+    "nvmOffset": 0,
+    "updateNotify": true,
+    "busyReject": true,
+    "writeCheck": true,
+    "groupValidate": "-",
+    "resetGroups": ["settings"],
+    "unit": "-",
+    "summary": "運転要求",
+    "description": "-",
+    "spec": "-",
+    "notes": "-"
+  }]
+}
+```
+
+### 6.2 型・配列・文字列・予約領域
+
+| 型 | 1要素のRAM／保存サイズ | Modbusの占有範囲 |
+|---|---|---|
+| `uint16_t` | 2バイト | 1レジスタ |
+| `uint32_t` | 4バイト | 2レジスタ |
+| `float` | 4バイト | 2レジスタ |
+| `string` | `length`バイト | `length / 2`レジスタ |
+| `reserved` | 実値のRAMを持たない | `length`レジスタ |
+
+数値配列は要素数分を連続配置します。たとえば番地100に長さ3の`uint32_t`を置くと、100〜105を占有します。通信値は上位バイトから送受信し、32ビット値も上位側から配置します。保存データは生成コードのメモリー表現をコピーするため、通信フレームとは区別して扱います。
+
+#### 6.2.1 文字列は固定長フィールド
+
+文字列の`length`は2以上の偶数で、RAM・保存データ・通信上の固定長バイト数です。ASCII printable文字を最大`length`文字まで格納できます。短い文字列の残りは0で埋め、最大長なら全バイトを文字として使います。JSONの初期値は`valueDomain: {kind: "string", default: "SENSOR-A"}`、空文字列は`default: ""`です。
+
+手書き側へ取得するときは、終端NULを追加するコピーAPIを使います。次は`device_name`を文字列として定義した例です。
+
+```c
+char name_copy[MODBUS_device_name_BUFFER_SIZE];
+
+if (get_device_name_copy(name_copy, sizeof(name_copy)) != 0)
+{
+    product_show_name(name_copy);
+}
+(void)set_device_name("SENSOR-A");
+```
+
+`MODBUS_<name>_MAX_LENGTH`は固定長、`MODBUS_<name>_BUFFER_SIZE`は固定長＋終端NULのサイズです。通信では1レジスタへ2バイトずつ格納します。通信書込みと復元でも、文字と末尾の0埋めの整合性を検査します。
+
+#### 6.2.2 予約領域
+
+`reserved`は、連続読出しに含めたい空き番地を定義します。読出しでは0を返し、RAM・保存領域・アクセサを持ちません。予約領域を含む通信書込みは例外`0x02`になります。予約領域の`length`はレジスタ数で指定します。
+
+#### 6.2.3 番地と保存オフセット
+
+Modbus番地は16ビットレジスタ単位、`nvmOffset`はバイト単位です。数値を同じ値に揃える必要はありません。保存領域は`config.nvmSize`内へ収め、ほかの保存対象と重複しないよう配置します。エディターは重複・範囲超過をエラー、型サイズ境界に揃っていない保存オフセットを警告として扱います。
+
+通信は各定義項目の全体を扱います。複数項目をまとめた要求も扱えますが、32ビット値や配列など一項目の途中から開始したり、途中で終えたりする範囲は拒否します。
+
+### 6.3 列挙型・書込み検証・更新通知
+
+列挙型は「列挙型」タブで登録し、配列長1の`uint16_t`レジスタの詳細から指定します。JSONの`enums`へ選択肢を登録し、各レジスタの`valueDomain`から型と初期値を参照します。通信・保存には登録した`uint16_t`の値を使います。
+
+列挙型のgetterは出力引数、setterは値引数で列挙型を受け取り、成功時に1、失敗時に0を返します。
+
+`busyReject`を有効にした項目は、`modbus_reg_write_guard_slave.h`へ宣言する同期callback `MB_BOOL modbus_user_is_busy_<name>(void);`を製品側で実装します。書込み要求ごとに手書き側の現在状態を問い合わせ、`MB_FALSE`なら続行、それ以外なら例外`0x06`を返します。要求に含まれる全対象のBUSY確認に成功してから、値の検証とRAM反映へ進みます。BUSY状態の所有者は手書き側です。
+
+`writeCheck`でアプリの検証関数へ現在値と要求値を渡し、`groupValidate`で複数項目をまとめて検証できます。書込み全体の検証に成功してからRAMへ反映します。
+
+`updateNotify`を有効にすると、正常なMaster writeと内部setterから同期コールバックを呼びます。同じ値の設定も正常な操作として通知します。NVMの保存要通知は、保存対象の値が変化した場合に立ちます。
+
+### 6.4 ビット定義
+
+「ビット定義」タブで定義ID・表示名・16/32ビット幅と各ビットの番号・識別名・表示名を登録します。maskは番号から表示します。レジスタの詳細で値の指定を「ビット定義」にし、定義と初期値を選択します。初期値のチェックとhex入力は連動し、未定義ビットもhexから指定できます。
+
+JSONは`bitsetDefs: [{id, label, width, bits: [{bit, id, label}]}]`と、各レジスタの`valueDomain: {kind: "bitset", bitsetId, default}`で表します。配列長1の`uint16_t`／`uint32_t`へ同じ幅の定義を割り当てます。通信・RAM・NVMでは、指定した幅の整数として全ビットを扱います。
+
+`modbus_reg_bits_slave.h`へ共通の`modbus_bit_state_t`（`MODBUS_BIT_OFF`／`MODBUS_BIT_ON`）、`<定義ID>_bits_t`構造体と`<定義ID>_<識別名>_MASK`の大文字定数を生成します。構造体の各フィールドは`modbus_bit_state_t`です。実装とAPI宣言は`modbus_reg_access_slave.c/.h`に置きます。
+
+| API | 動作 |
+|---|---|
+| `get_<reg>_<bitid>()` | 1ビットをOFF／ONで取得する |
+| `set_<reg>_<bitid>(on)` | OFF／ONを検査し、1ビットを反映する |
+| `get_<reg>_bits()` | 定義された全ビットを構造体で取得する |
+| `set_<reg>_bits(bits)` | 値渡しされた全フィールドを検査し、定義済みビットを1回で反映する |
+| `clear_<reg>_all()` | 予約ビットを含む整数全体を0にする |
+
+個別setterと`set_bits`は予約ビットを維持します。成功は1、失敗は0です。更新通知対象では成功時に1回通知し、同値設定も通知します。生整数のgetter・Default取得APIと、上表の専用ビット操作APIを公開します。未定義のrawビットも通信・NVMで受け付けます。
+
+`tools/test-editor-bitsets.cjs`はJSONの保存・読込み、不正定義の拒否、幅の境界、UIのチェック／hex連動、HTMLへの編集データ保存・読込みを確認します。生成C本体のビット処理をJavaScriptへ適応実行し、RAM/NVM反映と通知の境界をモックして予約ビット維持、検査後の一括反映、bit 31、同値・失敗時の通知も確認します。C構文確認・静的解析とファームウェアの実行確認は別に扱います。
+
+### 6.5 部分初期化グループ
+
+`resetGroupDefs`でグループを定義し、レジスタごとの`resetGroups`から参照します。HTMLでは「部分初期化グループ」で定義を編集し、各レジスタの「詳細」画面にある「部分初期化」のチェックで所属を指定します。
+
+部分初期化の定義例です。グループ定義と、レジスタの所属指定を抜粋しています。
+
+```json
+{
+  "resetGroupDefs": [
+    {"id": "mc_parameters", "label": "MC PARAMETERS"},
+    {"id": "mc_all", "label": "MC ALL"}
+  ],
+  "registers": [
+    {"resetGroups": ["mc_parameters", "mc_all"]}
+  ]
+}
+```
+
+1つの項目を複数グループへ所属させられます。グループ間の包含関係は、各項目の所属で明示します。RO・RAM専用項目も対象にでき、予約領域の所属や未定義・重複参照は入力エラーになります。
+
+公開enumは`modbus_reset_group_t`で、定数名は`MODBUS_RESET_GROUP_<グループIDの大文字>`です。成功した部分初期化は、値が同じ場合も必ず保存要通知を立てます。
+
+### 6.6 検証関数の戻り値とコピー
+
+`writeCheck`と`groupValidate`は、次の`modbus_write_result_t`を返します。
+
+| 値 | 意味 |
+|---|---|
+| `MODBUS_WRITE_OK` | 受理 |
+| `MODBUS_WRITE_ILLEGAL_ADDRESS` | 例外`0x02` |
+| `MODBUS_WRITE_ILLEGAL_VALUE` | 例外`0x03` |
+| `MODBUS_WRITE_DEVICE_FAILURE` | 例外`0x04` |
+| `MODBUS_WRITE_DEVICE_BUSY` | 例外`0x06` |
+
+範囲外の戻り値は`MODBUS_WRITE_DEVICE_FAILURE`へ正規化します。全対象の番地・書込み属性・BUSYを確認してから候補値を検査し、単項目検証、関連グループ検証へ進みます。検査の採否が決まってからRAMへ反映します。
+
+`alarm_high`と`alarm_low`を`float`、`groupValidate`を`alarms`とした場合の例です。
+
+```c
+#include "modbus_reg_write_guard_slave.h"
+
+modbus_write_result_t modbus_user_group_validate_alarms(
+    const modbus_alarms_after_t *after)
+{
+    return after->alarm_low <= after->alarm_high
+        ? MODBUS_WRITE_OK : MODBUS_WRITE_ILLEGAL_VALUE;
+}
+```
+
+`groupValidate`で指定したグループの検査関数は、専用の`modbus_<group>_after_t`を受け取ります。構造体の各フィールドは値を持ち、配列・文字列も構造体内へコピーします。手書きの検査関数では、たとえば`after->lower_limit`のように値を参照します。各グループの構造体と検査関数の宣言は、生成ヘッダーで確認できます。
+
+`writeCheck`の検査関数には、スカラー・enumを値渡しで渡します。文字列・数値配列は、現在値と候補値それぞれの独立コピーを渡します。検査引数は呼出し中に有効で、コピーの変更は実RAMや書込み候補へ反映されません。検査の採否は戻り値で返します。
+
+生成パーサー内のグループ用コピーはunionで1領域を共有し、呼出し直前に全メンバーを設定します。レジスタ表の`ram_ptr`は、生成コード専用の内部ヘッダーで宣言します。
+
+### 6.7 公開ヘッダーと内部ヘッダー
+
+`modbus_reg_map_slave.h`は配列長とNVMサイズ・関連定数を公開します。`modbus_reg_map_slave_internal.h`は生成実装用で、レジスタ表、RAMポインタ、内部の型および文字列処理の宣言を持ちます。公開ヘッダーから内部ヘッダーをincludeする経路はありません。
+
+手書きコードはgetter／setter、NVM、write guard等の公開ヘッダーを利用してください。内部ヘッダーを使うのは、生成されたmap、access、NVM、parserの4 Cファイルです。出力一式には内部ヘッダーも同梱します。レジスタ表は外部リンケージを持ち、生成ファイル間で共有します。
+
+### 6.8 parserのNaN検査と診断エコー
+
+生成parserのfloat書込みは「下限以上かつ上限以下」を満たす値を受け付けます。NaN、範囲外、範囲を外れる無限大は不正なデータ値として拒否します。float配列でも各要素を同じ規則で検査し、全検査が成功してからRAMへ反映します。
+
+診断エコー（Function 0x08、サブ機能0）は、受信CRCを除く部分から応答CRCを計算し、受信フレームと同じ長さで応答します。長さの検査は受信CRCを含むフレーム長を基準とします。
+
+`tools/test-editor-parser.cjs`は配布HTMLから生成したCの該当処理を取り出し、宣言・キャスト等をJavaScriptへ合わせてNaNのビット列、範囲境界、CRC既知値、エコー長、入力長境界を検査します。C89構文・静的解析と、ファームウェアのビルド・実機確認は区別して実施します。
+
+### 6.9 parserの受付アドレス判定
+
+手書き側で `uint8_t modbus_user_accept_slave_address(uint8_t address);` を実装します。受信アドレスを受け付ける場合は非0、それ以外は0を返します。設定値を参照し、受付可否だけを判定してください。
+
+生成parserはNULL・最小フレーム長を確認した直後、CRC検査より前にこの関数を呼びます。戻り値が0なら、その要求を無応答で終了します。判定は要求ごとに行い、setterや起動時の登録処理は不要です。関数は宣言だけを生成し、既定実装を用意しないため、手書き実装がなければリンク時に検出できます。
+
+`tools/test-editor-parser.cjs`で、生成Cから取り出した受付判定・CRC検査までの処理をJavaScriptへ合わせ、短い入力、拒否時の無応答、許可後の後続検査、および受付条件の変更を検査します。
+
+### 6.10 enumヘッダーの責務分離
+
+`modbus_reg_enums_slave.h`はenum型と定数だけを公開し、通常のアクセサはこの型を使います。レジスタの生値とenumの変換宣言（`*_from_register`／`*_to_register`）と、テーブルインデックスによるenum値の検査宣言は、生成コード専用の`modbus_reg_enum_internal_slave.h`で宣言します。この内部ヘッダーはenum型ヘッダーと`stdint.h`を直接読み込みます。
+
+生成access、parser、NVM、enumsの各実装は、内部ヘッダーを直接includeします。公開アクセサヘッダーからはenum型とtyped APIを利用でき、変換宣言は内部ヘッダー側で管理します。変換表と変換処理は生成内部で扱い、手書き側はenum型を使う公開getter／setterで値を受け渡します。
+
+### 6.11 生成されるファイル
+
+| ファイル | 役割 |
+|---|---|
+| `modbus_reg_map_slave.c/.h` | 現在値とDefault・値域・保存配置、公開の配列長／NVM定数 |
+| `modbus_reg_map_slave_internal.h` | 生成実装用のレジスタ表とRAM参照 |
+| `modbus_reg_idx_slave.h` | 項目indexと配列要素index、`MODBUS_SLAVE_ADDR` |
+| `modbus_reg_access_slave.c/.h` | 型付きgetter／setter、値域・Default取得、文字列コピー、ビット操作 |
+| `modbus_reg_update_notify_slave.c/.h` | 更新通知の宣言と振分け |
+| `modbus_reg_write_guard_slave.c/.h` | BUSY問い合わせ、単項目・グループ検証の宣言と専用型 |
+| `modbus_reg_nvm_slave.c/.h` | Default、部分初期化、保存要通知、回収・復元 |
+| `modbus_parser.c/.h` | RTUフレームの解析・検証・RAM反映・応答生成 |
+| `modbus_reg_enums_slave.c/.h` | enum定義がある場合の型・定数と変換実装 |
+| `modbus_reg_enum_internal_slave.h` | enum定義がある場合の生成実装用変換宣言 |
+| `modbus_reg_bits_slave.h` | ビット定義がある場合のOFF／ON型・専用構造体・mask定数 |
+
+生成一式を揃えて組み込み、手書きは公開ヘッダーを参照します。製品側で有効にした外部コールバックには、宣言に対応する実装を用意します。
+
+## 7. 開発・検証
+
+[TypeScriptとHTMLひな型](src/editor/)を編集し、Node.jsとnpmで配布HTMLを更新します。
 
 ```sh
 npm ci
 npm run typecheck
 npm run build
+npm test
 ```
 
-`npm run build` は型検査後、JavaScriptをひな型に埋め込み、配布用の単一HTMLを更新します。HTMLに保存済みの編集データも引き継ぎます。
+`npm run build`はTypeScriptを単体HTMLへ組み込み、HTML内の編集データを保持します。`npm test`は配布HTMLのモデル・生成器を対象に、JSONの読込み・保存、定義検査、NVMサイズ、生成API、更新通知・検証経路を確認します。
 
-列挙型のない定義は、現行Python版との照合に使えます。同じレジスタ定義のExcel原本と、ブラウザで保存したC/HのZIPを用意します。`requirements.txt` の依存を入れた開発環境で次を実行すると、11ファイルの名前と内容をバイト単位で比較できます。
+同じ配布HTMLの生成処理を使う補助コマンドもあります。
 
 ```sh
-python -B tools/verify-editor-trace.py definition.xlsx modbus-slave-generated.zip
+node tools/export-json.cjs product.json output-directory
 ```
 
-## 1.なぜ作ったか
-
-Modbus のレジマップやプロトコル部分は仕様書で厳密に決まっている一方で，
-それを C コードとして手打ちすると，
-
-- アドレスのずれ・サイズ指定ミス
-- min/max 範囲の書き間違い
-- 送受信フレームのバイト数計算ミス
-
-といった「しょぼいヒューマンエラー」がどうしても紛れ込みます。
-
-このツールでは，**レジマップの仕様書を唯一のソース・オブ・トゥルースにする**ことを目的にしています。  
-レジマップを Excel 上で修正すれば，ソフトウェアエンジニアはコードを一行も触らずに
-
-- レジスタ定義
-- アクセッサ
-- 送受信ハンドラ
-- 更新通知callback
-
-を丸ごと再生成できます。  
-プロトコルとして厳格に決まっている部分を自動生成に任せることで，  
-エンジニアはアプリケーションロジックに集中し，思わぬミスを根本から減らすことを狙っています。
-
-## 2.シナリオ
-
-生成されるコードは，Modbus フレームの送受信だけでなく，「値が更新されたらこう処理したい」といった，実装のたびに手で書きがちな定型パターンもカバーします。ここでは代表的なシナリオを紹介します（今後追加予定）。詳しい設定方法は「6.詳細仕様」を参照してください。
-
-以降の図では，本ツールが生成するコードを太枠のオレンジで **自動生成パート**，ユーザーが実装するコードを控えめな緑で **アプリ実装パート** として，共通の配色で表します。
-
-### 2.1 もっとも定型的でやりたくない部分を代行する
-
-Modbus スレーブとしての基本的な受信処理を考えてみます。Master から書き込みフレームが送られてくると，実機側では大きく分けて次の処理が必要です。
-
-1. UART/RS-485 などから実際にバイト列を受信する（HAL層）
-2. 受信したフレームをパースし，CRC・アドレス・型・Min/Max を検証して RAM へ反映する。必要なら NVM への書込み要求も行う
-3. OK（ACK）または NG（例外応答）のリプライフレームを組み立てる
-4. リプライフレームを実際に送信する（HAL層）
-
-このうち，1 と 4 の「実機の UART/RS-485 を直接触る」部分はハードウェアやボード構成に強く依存するため，汎用的に自動生成することはできません。一方，2 と 3 の「決まったルールに従ってバイト列を検証・変換する」部分は，仕様書（Excel）さえ決まっていれば機械的に導出できる領域であり，かつ人力で書くと最もミスが起きやすい部分でもあります。
-
-本ツールは，まさにこの「機械化しやすく，かつ人力でやりたくない」核の部分──パース・検証・RAM反映・NVM 呼び出し経路の確保・リプライ生成──を丸ごと代行します。ユーザーが実装するのは，実機依存の HAL 層（データの受信と送信）だけです。
-
-![受信・検証・応答生成・送信の責任分担](images/readme/01-receive-and-reply.svg)
-
-### 2.2 「通していいか」をアプリに聞く配線を代行する
-
-操作要求レジスタがあり，Master から次の値を書き込めるとします。
-
-| 値 | 意味 |
-|----|------|
-| 1  | 停止 |
-| 2  | 測定 |
-| 3  | 校正 |
-
-実機が「測定」で動作している最中に，Master から校正要求が書き込まれたとします。測定中に校正へ直接遷移するのは許可したくないので，アプリ側の状態判定ロジックがこれを拒否し，スレーブは NG（異常応答）を返します。
-
-続けて Master が停止を書き込むと，今度は許可された遷移なので，アプリ側の状態判定ロジックが受け入れ，スレーブは OK（正常応答）を返します。
-
-これは，書き込まれた値そのもの（Min/Max の範囲内かどうか）だけでは判断できません。「今の状態」と「書き込まれようとしている値」の組み合わせを見て初めて合否が決まる判断です。
-
-素朴に実装すると，受信処理の中に「このレジスタが書き込まれたら，現在の状態を見て許可された遷移かどうかをチェックし，ダメなら Exception 応答を返す」という分岐を自分で書き込むことになります。
-
-本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，書き込み要求のたびに現在値と新しい値をセットでアプリ側の判定関数へ渡し，その戻り値に応じて OK/NG のリプライを自動生成するコードが生成されます。アプリ側は「その遷移を許可するかどうか」を判断する状態遷移ロジックだけを実装すればよく，Exception 応答の組み立てや送信経路は考える必要がありません。
-
-**拒否されるケース（測定中に校正要求を書き込む）**
-
-![測定中の校正要求を拒否する流れ](images/readme/02-write-check-reject.svg)
-
-**受理されるケース（測定中に停止を書き込む）**
-
-![測定中の停止要求を受理する流れ](images/readme/03-write-check-accept.svg)
-
-アプリ側が実装するのは，状態遷移図で表される「その遷移を許可するかどうか」の判断だけです。呼び出しの配線と応答の生成は，どちらのケースでも自動生成コードが担います。
-
-### 2.3 「今は触るな」を1本のフラグで済ませる
-
-時刻レジスタは，Modbus 経由でも，実機の画面＋操作キーでも変更できるとします。
-
-実機の画面で時刻を編集している最中に，Master から同じ時刻レジスタへ Modbus 書き込みが来てしまうと，画面上の編集内容と競合してしまいます。編集中はアプリ側の都合で，一時的に Modbus からの書き込みを拒否したくなります。
-
-1. アプリが画面上で時刻編集を開始する
-2. アプリは，時刻レジスタだけを「今は拒否」と自動生成パートに伝える（フラグを1つ立てるだけ）
-3. Master が時刻を書き込もうとするが，busy として拒否される
-4. 画面上で時刻編集が確定する
-5. アプリは拒否を解除する
-6. Master が時刻を書き込むと，今度は正常に受理される
-
-素朴に実装すると，受信処理の中で「このレジスタは今アプリが編集中かどうか」を毎回チェックし，該当すれば Exception 応答を組み立てて返す，という分岐を自分で書くことになります。
-
-本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，レジスタ単位の拒否状態を持つビットと，それを見て busy 例外応答を返すコードが自動生成されます。アプリ側は，編集の開始・終了のタイミングで `modbus_set_busy_reject_mode(TRUE/FALSE)` を呼ぶだけでよく，例外応答の組み立てや送信経路を意識する必要はありません。
-
-拒否区間・受理区間をまたぐ一連の流れなので，シーケンス図で表します。
-
-![時刻編集中の書込み拒否と解除の時系列](images/readme/04-busy-window.svg)
-
-WRITE_CHECK（2.2）との違いは，判定ロジックすら書かなくていい点です。アプリが用意するのは「今は拒否」という ON/OFF のフラグ操作だけで，判断ロジック自体が不要になります。
-
-### 2.4 書き込みに連動した処理配線を代行する
-
-例として「時刻合わせ」を考えてみます。上位システム（Master）から Modbus 経由で現在時刻を書き込めるレジスタを用意したとします。実機側では，この値を受け取っただけでは意味がなく，最終的に RTC（リアルタイムクロック）チップへ実際に書き込んで初めて時刻合わせが完了します。また，実機の画面と操作キーで時刻合わせをして確定した場合も，最終的には同じ RTC 書き込み処理を呼びたくなります。
-
-素朴に実装すると，Modbus 受信処理とローカル操作の処理それぞれに「時刻が確定したら RTC 書き込み関数を呼ぶ」という分岐を別々に書くことになり，呼び出し経路がコードのあちこちに散らばってしまいます。
-
-本ツールでは，Excel でこのレジスタにフラグを1つ立てるだけで，Master からの書き込みと，アプリ側からの `set_current_time()` 呼び出しの両方から，同じユーザーコールバックが呼ばれるようになります。呼び出し元がどちらだったかはコールバックに渡される `source` 引数で判別できるので，必要なら経路ごとに分岐することもできます。そこから先，実際に RTC へ書き込む処理だけをアプリ側で実装すれば完成です。
-
-![Masterと内部setterから同じRTC処理への合流](images/readme/05-update-callback.svg)
-
-アプリ側は「RTCへの書き込み」という中身だけを実装すればよく，「いつ呼ばれるか」を自分で配線する必要はありません。経路を区別したい場合だけ，渡された `source` を見れば済みます。
-
-### 2.5 レジスタペアをまとめて検証する配線を代行する
-
-温度センサーの警報しきい値として，警報上限値（AL_HIGH）と警報下限値（AL_LOW）という2つのレジスタがあるとします。実機は，温度が AL_HIGH を超えるか AL_LOW を下回ったときに警報を出します。
-
-Master が Write Multiple Registers で AL_HIGH と AL_LOW を一括で書き込んだとします。「AL_LOW ≤ AL_HIGH」になっているかは，各レジスタの Min/Max チェックだけでは判定できません。AL_HIGH と AL_LOW の組み合わせを見て初めて判定できる検証です。
-
-素朴に実装すると，このレジスタ範囲への書き込みを受信処理の中で検出し，AL_HIGH と AL_LOW の両方の値を集めて，「下限 ≤ 上限」になっているかを判定するロジックを自分で書き込むことになります。
-
-本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定するだけで，両方の値をまとめてアプリ側の判定関数へ渡すコードが自動生成されます。アプリ側は，渡された2つの値が「下限 ≤ 上限」になっているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
-
-![警報上限値と下限値を組み合わせた検証](images/readme/06-pair-validation.svg)
-
-### 2.6 複数レジスタをひとまとめにして検証する配線を代行する
-
-時刻レジスタは，年・月・日・時・分・秒がそれぞれ独立した Modbus レジスタとして存在するとします。
-
-Master が Write Multiple Registers で「2026/08/18 09:58:12」を一括で書き込んだとします。これが実在する日時として成立しているか（たとえば2月30日のような組み合わせを弾けるか）は，各レジスタの Min/Max チェックだけでは判定できません。年・月・日・時・分・秒の組み合わせを見て初めて判定できる検証です。
-
-素朴に実装すると，このレジスタ範囲への書き込みを受信処理の中で検出し，関係する6つのレジスタの値をすべて集めて，日時として成立しているかを判定するロジックを自分で書き込むことになります。
-
-本ツールでは，Excel で6つのレジスタに同じグループ名を指定するだけで，6つの値をまとめてアプリ側の検証関数へ渡すコードが自動生成されます。アプリ側は，渡された6つの値が実在する日時として成立しているかどうかを判定するロジックだけを実装すればよく，値の収集や呼び出しタイミングを意識する必要はありません。
-
-![年・月・日・時・分・秒を揃えた日時検証](images/readme/07-datetime-validation.svg)
-
-### 2.7 書かれなかった方の穴埋めを代行する
-
-実機の RAM に AL_HIGH=100，AL_LOW=20 が保持されているとします。ここで Master が AL_LOW だけに 30 を書き込んだとします（AL_HIGH は今回の書き込み範囲に含まれません）。
-
-このとき，アプリ側の判定関数に渡したいのは，「今回書き込まれた AL_LOW の新しい値」と「今も RAM にある AL_HIGH の値」を組み合わせた，2つそろった値です。書き込まれなかった AL_HIGH をどこかから調達してこないと，「下限 ≤ 上限」の判定ができません。
-
-素朴に実装すると，今回の書き込みに AL_HIGH が含まれているかどうかを判定し，含まれていなければ RAM から読み出して埋め合わせる，という処理を自分で書くことになります。
-
-本ツールでは，Excel でこの2つのレジスタに同じグループ名を指定しておけば，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，判定関数へ渡すコードが生成されます。アプリ側は，書き込みが片方だけでも両方でも，常に「2つそろった値」として受け取れるので，「今回どちらが書かれたか」を気にせずに判定ロジックだけを書けます。
-
-![下限の新しい値とRAM上の上限値を組み合わせた検証](images/readme/08-pair-completion.svg)
-
-2.5では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の2項目そろった値としてアプリ側へ渡してくれます。
-
-### 2.8 書かれなかった分の穴埋めを代行する
-
-実機の RAM に「2026/08/18 09:58:12」が保持されているとします。ここで Master が「分」レジスタだけに 42 を書き込んだとします（年・月・日・時・秒は今回の書き込み範囲に含まれません）。
-
-このとき，アプリ側の検証関数に渡したいのは，「今回書き込まれた分の新しい値」と「それ以外の，今も RAM にある値」を組み合わせた，6つそろった1つの日時です。書き込まれなかった年・月・日・時・秒をどこかから調達してこないと，検証のしようがありません。
-
-素朴に実装すると，今回の書き込み範囲にどのレジスタが含まれているかを判定し，含まれていない項目は RAM から読み出して手動で埋め合わせる，という面倒な処理を書くことになります。しかも書き込み範囲の組み合わせパターンは色々あるので，抜け漏れなく実装するのは意外と骨が折れます。
-
-本ツールでは，Excel でこの6つのレジスタに同じグループ名を指定しておけば，今回書き込まれた分は新しい値，書き込まれなかった分は RAM の現在値を自動的に組み合わせて，検証関数へ渡すコードが生成されます。アプリ側は，書き込み範囲がどうであれ常に「6つそろった1つの日時」として値を受け取れるので，「今回どの項目が書かれたか」を気にせずに判定ロジックだけを書けます。
-
-![分の新しい値とRAM上の他5項目を組み合わせた検証](images/readme/09-datetime-completion.svg)
-
-2.6では入口が1つ（一括書き込み）でしたが，ここでは入口が2つ（今回の書き込み分とRAMの現在値）に増え，それでも自動生成パートが同じ形の6項目そろった値としてアプリ側へ渡してくれます。
-
-### 2.9 時刻書き込みの拒否・検証・通知，三点盛り
-
-ここまで見てきた「今は触るな（2.3）」「複数レジスタの検証（2.6〜2.8）」「書き込みに連動した処理配線（2.4）」は，実際には同じ1回の書き込みの中で組み合わさって動きます。最後に，時刻合わせを例に，これらが一つの流れとしてどうつながるかを見てみます。
-
-Master が年・月・日・時・分・秒を一括で書き込んだとき，生成コードは次の順序で処理します。
-
-![時刻書込みの拒否・検証・RAM反映・RTC更新の全体フロー](images/readme/10-write-end-to-end.svg)
-
-> [!IMPORTANT]
-> busy判定，値の検証，RAM反映からRTC書き込みまでの呼び出し配線は，すべて自動生成されます。アプリ側が考えるのは，「値が正しいかどうか」の判定ロジックと「RTCへどう書き込むか」の実処理，その2つだけです。
-
-## 3.対象とする環境
-
-本ツールは以下の環境で動作確認を行っています。
-
-- **OS**: Windows 10 / 11（※ macOS / Linux でも Python と tkinter が動作すれば利用可能）
-- **Python**: 3.10 〜 3.12
-- **必要ライブラリ**
-  - `pandas`
-  - `openpyxl`
-  - `tkinter`（GUI のファイル選択ダイアログに使用）
-- **入力ファイル**: Excel（`.xlsx`）形式のレジスタ定義書  
-- **出力**: C 言語（C89 相当）で実装された Modbus スレーブ向けコード一式  
-
-※ Modbus 通信の実装そのもの（UART/SPI/RS-485 のドライバ等）は対象外です。  
-  あくまで「レジマップ → コード生成」に特化したツールです。
-
----
-
-## 4.クイックスタート
-
-### 4.1. EXE版を使う
-
-#### 4.1.1. ダウンロード
-Windows 向けの実行ファイル（exe）は  
-GitHub Releases ページからダウンロードできます。
-
-➡ **[Releases ページはこちら](https://github.com/prevalmam/modbus-slave-regmap-generator/releases)**
-
-最新バージョンの Assets から  
-`modbus-slave-regmap-generator.exe` をダウンロードしてください。
-
-#### 4.1.2. SHA-256（検証用）
-
-配布している実行ファイルの SHA-256 ハッシュ値は  
-Releases の Assets に含まれる `SHA256SUMS.txt` に記載しています。
-
-ダウンロード後、以下のコマンドで検証できます。
-
-```powershell
-certutil -hashfile modbus-slave-regmap-generator.exe SHA256
-```
-出力されたハッシュ値が SHA256SUMS.txt に記載されている値と一致すれば、
-ファイルが改ざんされていないことを確認できます。
-
-### 4.2. ソースコードから使う
-
-#### 4.2.1. git clone + pip install
-次に示すコマンドを実行して，ソースコードをクローンし，pip でインストールします。
-
-```powershell
-git clone https://github.com/prevalmam/modbus-slave-regmap-generator.git
-cd modbus-slave-regmap-generator
-pip install .
-```
-
-#### 4.2.2. 使い方
-
-1. Excel でレジスタ定義ファイルを準備します。
-2. コマンドラインから以下を実行します。
-
-```powershell
-msrg
-```
-3. 起動後に Excel ファイルを選択するとExcel と同じフォルダに C/C ヘッダファイル群が出力されます。
-
-### 4.2.3. 数値setterの標準生成方式
-
-数値スカラーsetterの共通化を標準動作としています。
-EXEをダブルクリックしてExcelを選択すると、共通化されたCコードを生成します。
-ソース版の `msrg` も同じ動作で、生成方式を指定する引数は不要です。
-
-インストール済みパッケージを更新せず、チェックアウト内のソースを直接使う場合は、
-リポジトリーのルートで次を実行できます。
-
-```powershell
-.\.venv\Scripts\python.exe -B .\src\modbus_slave_regmap_generator\main.py
-```
-
-`uint16_t`、`uint32_t`、`float` のスカラーsetterを、アクセスC内の型別
-`static` 関数へ委譲します。公開する名前付き・型付きAPIと既存の定義テーブルを維持し、
-通知は対象setterに残します。同値setでも受理時の通知を行い、RAM更新とNVM要求は
-変更時だけ行います。getter、文字列、数値配列、masked setterの処理と
-外部Modbus書込みの権限判定は従来の動作を維持します。追加の静的RAMやheapは使用しません。
-
-Pythonからも通常の呼出しで共通化されたsetterを生成します。
-
-```python
-reg_access.generate(workbook)
-```
-
-この生成器を利用する各プロジェクトで、数値スカラーsetterの共通化が適用されます。
-Flash削減量と追加の呼出し負荷は、利用先のコンパイラー・最適化設定で確認してください。
-
-## 5.生成コードの使い方
-
-### 5.0 全体の流れ
-
-生成されたコードは、以下のステップで使用します。
-
-1. 送信フック差し込み（`ModbusPort_RequestSend` 実装）
-2. NVMドライバ差し込み
-3. RAM実値の初期化
-4. 受信処理（Master からのリクエストフレームを受信し，パースし，応答を送信）
-5. 値の参照・更新（getter/setter でアプリ側からアクセス）
-6. 更新通知（Master write／内部setter成立後のcallback処理）
----
-
-### 5.1 送信フック差し込み（`ModbusPort_RequestSend` 実装）
-
-生成コード一式のうち、実機へフレームを吐き出す処理だけはユーザー側で書き足す必要があります。`modbus_parser.h` 冒頭には次のような extern 宣言だけが置かれています。
-
-```c
-extern void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length);
-```
-
-この関数は、Read 応答・Write ACK・例外応答・診断エコーなど，`modbus_parse_and_reply()` がフレームを返送する必要があるたびに内部から呼び出されます。UART / RS-485 / TCP など、実際の送信ドライバを呼び出すコードを実装してください。最低限の手順は以下のとおりです。
-
-1. `modbus_parser.h` の extern 宣言と同じシグネチャで、自プロジェクトの送信モジュールに実体を実装する。
-2. TX イネーブルや CRC 追加など、物理層に必要な処理を行ったうえで `frame` バッファを `length` バイト分送信する。
-3. 送信完了待ちや半二重制御（DE/RE 制御）が必要な場合は、この関数内で完結させる。
-
-参考までに、RS-485 ＋ DMA 送信を想定した最小実装例は以下です。
-
-```c
-void ModbusPort_RequestSend(const uint8_t *frame, uint16_t length)
-{
-    rs485_set_tx_enable(true);
-    uart_dma_send(frame, length);
-    uart_dma_wait_for_complete();
-    rs485_set_tx_enable(false);
-}
-```
-
-このフックを埋めておけば、以降の応答送信はすべて生成コードだけで完結します。
-
-### 5.2 NVMドライバ差し込み
-
-受信処理側の `modbus_parser.c` では、Write Single (0x06)／Write Multiple (0x10) の各パスで RAM を更新したあと、Excel の RegisterTable で `NVM_Offset` にオフセットを指定したエントリについて `NVM_Request_Write_Bytes()` を呼び出します。アプリ側から `set_xxx()` で値を更新した場合も、同じく `NVM_Offset` が有効なエントリは NVM に反映されます。`NVM_Offset` は NVM 領域先頭からのバイトオフセットで、物理番地そのものではありません。生成コードは次の外部関数を呼び出すため、実機依存の NVM（FRAM／FLASH／EEPROM など）ドライバをプロジェクト側で実装してください。
-
-```c
-extern void NVM_Request_Write_Bytes(uint16_t offset,
-                                    const uint8_t *data,
-                                    uint16_t length);
-```
-
-実装時のポイント:
-
-1. `offset` は NVM 領域先頭からのバイトオフセットです。RegisterTable の `NVM_Offset` に `0x0000`、`0x0004`、`16` のように明示指定します。NVM に保存しないエントリは `NVM_Offset` に `-` を指定します。
-2. `data` は RAM 上の値をバイト列として見たものです。setter では 1 要素分、Modbus Write 受信では対象ブロック分が渡されます。
-3. `length` は書き込む総バイト数です。
-
-例えば I2C 接続の FRAM へブロック書き込みする場合:
-
-```c
-void NVM_Request_Write_Bytes(uint16_t offset,
-                             const uint8_t *data,
-                             uint16_t length)
-{
-    fram_lock_bus();
-    fram_begin_transaction();
-    fram_write(offset, data, length);
-    fram_end_transaction();
-    fram_unlock_bus();
-}
-```
-
-もしプロジェクトで NVM 書き込みを使わない場合でも、リンカエラーを防ぐためにシグネチャどおりのスタブだけは用意してください。スタブ内で全引数を `(void)` キャストしておけば未使用警告も抑止できます。
-
-```c
-void NVM_Request_Write_Bytes(uint16_t offset,
-                             const uint8_t *data,
-                             uint16_t length)
-{
-    (void)offset;
-    (void)data;
-    (void)length;
-}
-```
-
-
-### 5.3 初期化
-
-起動時に行うべき初期処理は、RAM の実値を初期化することです。
-
-**RAM の実値を `g_reg_table_slave` 経由でセットする** — NVM/別ストレージからの復元あるいはデフォルト値の適用を、生成済み getter/setter ではなく `g_reg_table_slave` の `ram_ptr` と `size` を使って一括処理するのが最も手軽でミスがありません。永続領域のデータがない場合は、`default_value` をコピーするだけで RAM が仕様書どおりに初期化されます。
-
-    ```c
-    static void load_reg_defaults(void)
-    {
-        for (uint16_t i = 0; i < g_reg_table_slave_size; ++i)
-        {
-            const reg_table_slave_entry_t *e = &g_reg_table_slave[i];
-            uint16_t elem_size = (uint16_t)(e->size / e->length);
-            for (uint16_t j = 0; j < e->length; ++j)
-            {
-                const uint8_t *src = ((const uint8_t *)e->default_value) + (j * elem_size);
-                uint8_t *dst = ((uint8_t *)e->ram_ptr) + (j * elem_size);
-                (void)memcpy(dst, src, elem_size);
-            }
-        }
-    }
-    ```
-
-write通知を含むその他の生成ファイルは静的領域がゼロ初期化されるため、追加の初期化は不要です。
-
-### 5.4 受信処理とパースと応答送信
-
-Master からのリクエストフレームを受信したら，`modbus_parse_and_reply()` に渡すだけで完了します。応答フレーム（ACK・例外応答を含む）の送信も，この関数の内部で 5.1 の `ModbusPort_RequestSend()` を通じて自動的に行われます。
-
-    if (rx_complete) {
-        modbus_parse_and_reply(rx_buf, rx_len);
-    }
-
-パース後に自動的に行われる処理：
-
-- CRC の検証
-- Function Code の判定（0x03 Read／0x06,0x10 Write／0x08 診断）
-- レジスタ値の展開
-- Min/Max チェック
-- RAM（g_reg_table_slave[]）への反映
-- NVM 書き込み要求（値が変化し、NVM_Offset にオフセットを指定した場合）
-- 応答フレームの生成と送信
-
----
-
-### 5.5 レジスタアクセス（getter / setter）
-
-#### 5.5.1 値の読み出し（getter）
-
-    uint16_t mode = get_device_mode();
-    float process_value = get_process_value();
-
-#### 5.5.2 値の書き換え（setter）
-
-    set_device_mode(2);
-    set_process_value(36.5f);
-
-setter は min/max チェックを自動で行います。範囲外の値をセットしようとした場合は何も変更されません。値が現在値と異なる場合は RAM を更新し、`NVM_Offset` が有効なエントリでは `NVM_Request_Write_Bytes()` で NVM にも反映します。同じ値をセットした場合は成功扱いで戻りますが、RAM/NVM への書き込みは行いません。
-
-#### 5.5.3 文字列レジスタのアクセス
-
-`Type` に `string` または `CHAR` を指定したレジスタでは、数値用の min/max 取得関数は生成されず、文字列専用のアクセサが生成されます。
-
-```c
-char name_copy[MODBUS_device_name_BUFFER_SIZE];
-if (get_device_name_copy(name_copy, sizeof(name_copy)) != 0)
-{
-    /* name_copy は NUL 終端されているため、C の文字列関数へ渡せる。 */
-}
-
-set_device_name("SENSOR-A");
-```
-
-生成される定数と関数は次のとおりです。定数名の `<VarName>` 部分は、RegisterTable に記述した大文字・小文字をそのまま保持します。
-
-| 定数 | 用途 |
-|------|------|
-| `MODBUS_<VarName>_MAX_LENGTH` | 設定可能な最大文字数。ASCII printable 文字列では `ArrayLen` と同じ値になる |
-| `MODBUS_<VarName>_BUFFER_SIZE` | 最大長の文字列と終端 NUL を格納できるバッファサイズ。`MAX_LENGTH + 1U` として生成される |
-
-| 関数 | 用途 |
-|------|------|
-| `int get_<VarName>_copy(char *dst, uint16_t dst_size)` | 固定長フィールドを呼び出し側へコピーし、末尾に NUL を追加する |
-| `int set_<VarName>(const char *value)` | NUL 終端された C 文字列を検証して固定長フィールドへ反映し、必要に応じて NVM に保存する |
-
-`set_<VarName>()` は ASCII printable 文字のみを許可し、最大 `MODBUS_<VarName>_MAX_LENGTH` 文字まで設定できます。`get_<VarName>_copy()` のコピー先には `MODBUS_<VarName>_BUFFER_SIZE` byte 以上を確保してください。
-
-内部 RAM は `ArrayLen` byte の固定長フィールドであり、最大長まで文字が格納されている場合はフィールド内に NUL がありません。そのため、内部 RAM や Modbus から読み出した固定長データを `strlen()`、`strcmp()`、`printf("%s", ...)` などの C 標準文字列関数へ直接渡してはいけません。標準文字列関数を使用する場合は、必ず `get_<VarName>_copy()` で `ArrayLen + 1` byte 以上のバッファへコピーし、NUL 終端された C 文字列に変換してから渡してください。
-
-#### 5.5.4 下限値・上限値の取得
-
-    uint16_t min_mode = get_device_mode_min();
-    uint16_t max_mode = get_device_mode_max();
----
-
-### 5.6 更新通知
-
-RegisterTableの`UPDATE_NOTIFY`を`TRUE`にすると、正常に受理したModbus
-Master writeと、正常終了した生成setterの両方から同期的に呼び出すユーザー
-callbackの宣言と呼出コードが生成されます。これは値変化の通知ではなく、正常な
-更新操作の成立通知です。現在値と同じ値をwriteまたはsetした場合も毎回通知します。
-
-```c
-typedef enum
-{
-    MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE = 1,
-    MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET = 2
-} modbus_reg_update_source_t;
-
-void modbus_user_device_mode_updated(modbus_reg_update_source_t source)
-{
-    if (source == MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE)
-    {
-        app_apply_device_mode(get_device_mode());
-    }
-}
-```
-
-callbackにはweakな空実装を生成しません。`UPDATE_NOTIFY=TRUE`にしたすべての
-変数について、ユーザープロジェクト側で`modbus_user_<VarName>_updated()`を
-実装してください。未実装の場合はリンクエラーになります。
-
-#### Master writeの呼出順序
-
-Write Single（0x06）／Write Multiple（0x10）が正常に受理された場合、生成
-parserは次の順序で処理します。
-
-1. 書込み対象、アクセス権、`BUSY_REJECT`、Min/Max、`WRITE_CHECK`、
-   `GROUP_VALIDATE`を検証する。
-2. 対象をRAMへ反映し、値が変化したNVM対象には
-   `NVM_Request_Write_Bytes()`を呼ぶ。
-3. `ModbusPort_RequestSend()`へ正常ACKの送信を要求する。
-4. `UPDATE_NOTIFY=TRUE`の対象ごとに、
-   `MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE`を渡してcallbackを同期的に呼ぶ。
-5. すべてのcallbackがreturnした後、`modbus_parse_and_reply()`がreturnする。
-
-`ModbusPort_RequestSend()`のreturnは、UARTやDMAによる物理的なACK送信完了を
-意味しません。生成器が保証するのは、ACKの**送信要求後**にcallbackを呼ぶ
-ことまでです。
-
-Write Multipleでは、全対象をコミットしてACK送信を要求した後、対象変数を
-レジスタアドレス昇順に1回ずつ通知します。最初のcallbackから、同じ要求に
-含まれるほかの変数も更新後の値として参照できます。
-
-拒否したwriteでは正常ACKも更新callbackも呼びません。callbackが呼ばれる
-時点では書込み受理とACK送信要求が完了しているため、callbackからwriteを
-拒否することはできません。拒否条件は`BUSY_REJECT`、`WRITE_CHECK`、
-`GROUP_VALIDATE`へ実装してください。
-
-#### 内部setterの呼出順序
-
-生成された`set_<VarName>()`は、引数検証に成功した後、必要ならRAM更新と
-NVM書込み要求を行い、`MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET`を渡して
-callbackを同期的に呼びます。callbackがreturnした後にsetterが`1`を返します。
-
-- 同値setでもcallbackを呼びますが、RAM更新とNVM書込み要求は省略します。
-- 範囲外の値、不正な配列index、不正な文字列などでsetterが`0`を返す場合は
-  callbackを呼びません。
-- `set_<VarName>_masked()`は通常setterへ委譲するため、通知は1回です。
-- 配列は要素単位ではなく変数単位で通知します。
-- `UPDATE_NOTIFY=FALSE`のsetterはcallbackを呼びません。
-
-#### callback利用上の注意
-
-callbackはparserまたはsetterの呼出元コンテキストで同期実行されます。生成器は
-キューイング、タスク切替、排他制御、再入防止、実行時間監視を行いません。
-
-- callbackが長時間ブロックすると、parserまたはsetterもreturnしません。
-- callbackから`UPDATE_NOTIFY=TRUE`の別変数のsetterを呼ぶと、そのcallbackへ
-  同期的に入ります。深いcallbackチェーンや循環呼出しに注意してください。
-- callbackから同じ変数のsetterを呼ぶと、同値でも再通知するため無限再帰に
-  なります。
-- Write Multipleのcallbackから、後でMaster write通知される別変数のsetterを
-  呼んだ場合、その変数には`INTERNAL_SET`、続いて`MASTER_WRITE`のcallbackが
-  呼ばれる場合があります。
-- callback内のgetterは、Master write直後のsnapshotではなく、呼出時点の
-  最新RAM値を返します。
-
-baudrate、parity、UART再初期化、再起動など、ACK送信完了前に行うと通信へ
-影響する処理は、callbackでは要求フラグだけを立て、UARTのTX完了を確認して
-から実行してください。
-
-```c
-void modbus_user_modbus_baudrate_updated(modbus_reg_update_source_t source)
-{
-    (void)source;
-    s_modbus_config_update_requested = 1U;
-}
-```
-
-`NVM_Request_Write_Bytes()`には完了結果がないため、callbackはNVM永続化完了を
-保証しません。また、生成RAM変数や`g_reg_table_slave[].ram_ptr`へ直接代入した
-場合は通知しません。通知対象は正常なMaster writeと生成setterだけです。
-
-
-## 6.詳細仕様
-
-### 6.1.入力 Excel のフォーマット概要
-
-本ツールは、次のような構造のレジスタ定義書（Excel）を前提としています。
-
-#### 6.1.1.RegisterTable シート
-
-| 列名 | 例 | 説明 |
-|------|------------|-------------------------------------------|
-| `Reg_Addr` | `1000` | Modbus アドレス(10進数) |
-| `VarName` | `device_mode` | レジスタの論理名（C 変数名にも使用） |
-| `Type` | `uint16_t` / `uint32_t` / `float` / `string` / `CHAR` / `reserved` | 型（C コード生成に利用） |
-| `ArrayLen` | `1` / `NUM_DISCRETE_INPUTS` | 配列長。複数の場合は連続アドレスを自動展開 |
-| `Access` | `RW` / `RO` | Modbus 経由のアクセス権 |
-| `Min` | `0` | 許容最小値（境界チェックで使用） |
-| `Max` | `3` | 許容最大値（境界チェックで使用） |
-| `Default` | `0` | 初期値 |
-| `NVM_Offset` | `-` / `0x0000` / `16` | `-` の場合は NVM に保存しない。数値の場合は NVM 領域先頭からのバイトオフセット |
-| `UPDATE_NOTIFY` | `TRUE`/`FALSE` | TRUE の場合、正常なMaster write／内部setter成立後に同期callbackを呼ぶ |
-| `BUSY_REJECT` | `TRUE`/`FALSE` | TRUE の場合、レジスタ単位のbusy状態によるModbus書込み拒否APIを生成する |
-| `WRITE_CHECK` | `TRUE`/`FALSE` | TRUE の場合、型付きユーザー書込み判定関数を呼び出す |
-| `GROUP_VALIDATE` | `-` / グループ名 | 同じグループ名のレジスタを仮更新後の値で検証する |
-
-`NVM_Offset` は空欄禁止です。保存しない場合は `-`、保存する場合は 10進数または `0x` 始まりの16進数を指定してください。指定した NVM 範囲が `NVM_SIZE` を超える場合、または他のエントリと重複する場合はエラーになります。オフセットが型サイズ境界にそろっていない場合は警告しますが、生成は継続します。
-
-`UPDATE_NOTIFY`、`BUSY_REJECT`、`WRITE_CHECK` は必須列で、値は大文字の `TRUE` または `FALSE` のみ指定できます。空欄、`-`、小文字表記はエラーです。`GROUP_VALIDATE` も必須列で、未使用時は `-`、使用時はC識別子として有効なグループ名を指定します。`UPDATE_NOTIFY=TRUE`はread-onlyレジスタにも指定できます。その場合は内部setterからだけ通知されます。
-
-##### 文字列レジスタ
-
-文字列を扱う場合は、`Type` に `string` または `CHAR` を指定します。RAM、NVM、Modbus 上では `ArrayLen` byte の固定長フィールドとして扱い、Modbus 上は 1 register に 2 byte ずつ、high byte → low byte の順で格納されます。
-
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | UPDATE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
-|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
-| `1000` | `device_name` | `string` | `16` | `RW` | `-` | `-` | `SENSOR-A` | `0x0000` | `TRUE` | `FALSE` | `TRUE` | `DEVICE` |
-
-文字列レジスタには次の制約があります。
-
-- `ArrayLen` は固定長フィールドのサイズであると同時に、設定可能な最大文字数です。`ArrayLen=16` の場合、RAM、NVM、Modbus の占有サイズは 16 byte で、最大16文字まで設定できます。
-- stringごとに`MODBUS_<VarName>_MAX_LENGTH`と`MODBUS_<VarName>_BUFFER_SIZE`が`modbus_reg_access_slave.h`へ生成されます。アプリ側の最大文字数やC文字列バッファサイズには、この定数を使用してください。
-- `ArrayLen` は偶数のみ許可します。`15` のような奇数を指定するとエラーで生成を中止します。
-- 文字数が `ArrayLen` 未満の場合は、文字列の後ろを `0x00` で埋めます。文字数がちょうど `ArrayLen` の場合は、フィールド内の全 byte を文字として使用し、フィールド内に終端 NUL は格納しません。
-- `Default` は ASCII printable 文字のみ指定できます。空欄は許可しません（入力漏れと区別するため）。
-- `Default` を空文字列にしたい場合は `-` を指定してください。リテラルの `-` という文字列をDefaultにしたい場合は `"-"` のようにダブルクォートで囲みます。
-- `Min` と `Max` は必ず `-` を指定してください。空欄は許可しません。
-- `UPDATE_NOTIFY`を`TRUE`にすると、文字列レジスタへの正常なMaster writeと内部setterの両方を通知できます。
-- Modbus Write では、途中に NUL がある場合はNUL以降がすべて `0x00` paddingであるデータを受け付けます。NULがない場合は、全 `ArrayLen` byteがASCII printable文字であれば最大長の文字列として受け付けます。
-
-固定長フィールドは、最大長まで文字が格納されている場合にNUL終端されません。内部RAMやModbusデータをC文字列として直接扱わず、`strlen()`、`strcmp()`、`printf("%s", ...)`などへ渡す前に、`ArrayLen + 1` byte以上のバッファへコピーして末尾にNULを追加してください。生成される`get_<VarName>_copy()`はこの変換を行います。
-
-生成される`modbus_string_field_is_valid()`は、固定長フィールドが「ASCII printable文字＋`0x00` padding」または「全byteがASCII printable文字」のどちらかであることを検証します。`modbus_string_field_length()`は先頭のNUL位置、NULがなければフィールドサイズを論理文字数として返します。ユーザープロジェクト側でNVMから復元する場合も、この検証関数を使用して`ArrayLen` byteだけをRAMへコピーしてください。NVM上に終端用の追加byteは保存しません。
-
-##### 予約レジスタ（reserved）
-
-連続するアドレスブロックを master が一括 Read する際、途中に何も割り当てていないアドレスが存在する場合は `Type` に `reserved` を指定します（大文字小文字は問いません）。
-
-| Reg_Addr | VarName | Type | ArrayLen | Access | Min | Max | Default | NVM_Offset | UPDATE_NOTIFY | BUSY_REJECT | WRITE_CHECK | GROUP_VALIDATE |
-|---------:|---------|------|---------:|--------|-----|-----|---------|------------|------|-------------|-------------|----------------|
-| `1173` | `reserved_1173` | `reserved` | `2` | `-` | `-` | `-` | `-` | `-` | `FALSE` | `FALSE` | `FALSE` | `-` |
-
-- `ArrayLen` は **Modbus レジスタ数**（1 = 2 byte）で指定します。`2` であれば 1173〜1174 の 2 レジスタ分を予約します。
-- `Access` / `Min` / `Max` / `Default` / `NVM_Offset` は `-`、`UPDATE_NOTIFY` / `BUSY_REJECT` / `WRITE_CHECK` は `FALSE`、`GROUP_VALIDATE` は `-` を指定してください。
-- `VarName` は記述必須ですが、C 識別子の制約はありません（ドキュメント用途）。
-
-**生成物への影響**
-
-| 生成物 | 動作 |
-|--------|------|
-| RAM 変数 | 生成しない |
-| `default_` / `min_` / `max_` 定数 | 生成しない |
-| `get_` / `set_` アクセス関数 | 生成しない |
-| `g_reg_table_slave[]` エントリ | 生成する（`ram_ptr = NULL`、`REG_TYPE_RESERVED`） |
-| `MODBUS_IDX_` マクロ | 生成する（テーブルインデックスとの対応を維持するため） |
-
-**Read 時の挙動**
-
-| master の要求 | スレーブの応答 |
-|-------------|------|
-| reserved を含む範囲の一括 Read | reserved アドレス部分は `0x0000` で正常返答 |
-| reserved アドレス範囲に一致しない Read（例：2 レジスタ占有の reserved に対し 1 レジスタ単位で Read） | `ILLEGAL_DATA_ADDRESS` exception |
-| 登録されていないアドレスへの Read | `ILLEGAL_DATA_ADDRESS` exception |
-
-※プロジェクトに応じて追加カラムは自由に拡張できます。  
-
-#### 6.1.2LengthDefs シート（任意）
-
-| 列名 | 説明 |
-|------|-------------------------------------------|
-| `Macro_Name` | ArrayLen のマクロ名 |
-| `Value` | マクロの値 |
-
-
-![LengthDefs シートの例](images/format_LengthDefs.png)
-
-※プロジェクトに応じて追加カラムは自由に拡張できます。  
-
-#### 6.1.3.Config シート
-
-標準フォーマットでは C5セルに `NVM_SIZE`、D5セルに NVM 領域のサイズ（10進数）を指定します。`NVM_SIZE` は `NVM_Offset` の範囲チェックと、生成コード上の未使用値 `NVM_OFFSET_UNUSED` の定義に使われます。指定可能な範囲は `1` から `65535` です。
-
-標準フォーマットでは C6セルに `SLAVE_ADDR`、D6セルに Modbus スレーブアドレス（10進数）を指定します。
-
-![Config シートの例](images/format_Config.png)
-
----
-
-### 6.2.書込みガード
-
-生成コードはModbus書込みを次の順序で処理します。
-
-1. 書込み範囲、アクセス権、レジスタ全体が含まれることを確認
-2. `BUSY_REJECT`を確認
-3. Min/Maxおよび文字列形式を確認
-4. `WRITE_CHECK`を呼び出す
-5. 仮更新後のpointer snapshotを作成
-6. 関係する`GROUP_VALIDATE`を呼び出す
-7. すべて成功した場合だけRAMへ反映し、必要なNVM書込みを要求
-
-配列、文字列、`uint32_t`、`float`を含め、Excelの1エントリの一部だけを書き込む要求は拒否します。複数レジスタ書込みで検証が失敗した場合、RAMとNVM書込み要求には一切反映しません。
-
-検証成功後はRAMを更新してから`NVM_Request_Write_Bytes()`を呼び出します。このNVM APIには戻り値がないため、NVMドライバ内部の失敗、キュー枯渇、書込み中の電源断まで含めた永続化のatomicityは保証しません。
-
-#### BUSY_REJECT
-
-`BUSY_REJECT=TRUE`のレジスタには次のAPIを生成します。
-
-```c
-MB_BOOL modbus_get_busy_reject_mode(void);
-void modbus_set_busy_reject_mode(MB_BOOL busy);
-```
-
-busy中のModbus書込みには`MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY`（`0x06`）を返します。busy状態は対象レジスタごとのbitで保持します。
-
-#### WRITE_CHECK
-
-`WRITE_CHECK=TRUE`のレジスタには型に応じたextern宣言を生成します。これらの関数はユーザープロジェクト側で実装してください。
-
-```c
-/* スカラー */
-modbus_write_result_t modbus_user_write_check_mode(
-    uint16_t current_value,
-    uint16_t new_value);
-
-/* 配列 */
-modbus_write_result_t modbus_user_write_check_table(
-    const uint16_t current_value[],
-    const uint16_t new_value[],
-    uint16_t count);
-
-/* 固定長文字列 */
-modbus_write_result_t modbus_user_write_check_name(
-    const modbus_string_view_t *current_value,
-    const modbus_string_view_t *new_value);
-```
-
-`modbus_string_view_t`はNUL終端を前提としない固定長文字列への参照と論理文字数を保持します。文字列用WRITE_CHECKでは`data[0]`から`data[length - 1]`までを検証し、`data`をC標準文字列関数へ直接渡さないでください。
-
-同値書込みの場合もWRITE_CHECKを呼び出します。`MODBUS_WRITE_OK`以外を返すと書込みを拒否し、その理由をModbus exceptionとして返します。
-
-#### GROUP_VALIDATEとpointer snapshot
-
-同じ`GROUP_VALIDATE`名を持つレジスタのいずれかが書込み範囲に含まれる場合、対応する関数を1回呼び出します。
-
-```c
-modbus_write_result_t modbus_user_group_validate_lower_upper(
-    const modbus_reg_snapshot_t *after)
-{
-    return (*after->lower <= *after->upper)
-        ? MODBUS_WRITE_OK
-        : MODBUS_WRITE_ILLEGAL_VALUE;
-}
-```
-
-`modbus_reg_snapshot_t`はGROUP_VALIDATEに参加する各レジスタへの型付きconst pointerまたは文字列viewを保持します。書込み対象はエンディアン変換済み・アラインメント済みの仮更新値、対象外は現在のRAM値を指します。配列と文字列は次のように参照できます。
-
-```c
-uint16_t first = after->table[0];
-char first_char = after->name.data[0];
-uint16_t name_length = after->name.length;
-```
-
-snapshotとその各pointer/viewはGROUP_VALIDATE callbackの実行中だけ有効です。callback終了後に保存または参照してはいけません。
-
-生成コードはC89互換のため、`bool`と`<stdbool.h>`を使用しません。
-
-```c
-typedef uint8_t MB_BOOL;
-typedef uint8_t modbus_write_result_t;
-
-#define MB_FALSE ((MB_BOOL)0U)
-#define MB_TRUE  ((MB_BOOL)1U)
-
-#define MODBUS_WRITE_OK              ((modbus_write_result_t)0x00U)
-#define MODBUS_WRITE_ILLEGAL_ADDRESS ((modbus_write_result_t)0x02U)
-#define MODBUS_WRITE_ILLEGAL_VALUE   ((modbus_write_result_t)0x03U)
-#define MODBUS_WRITE_DEVICE_FAILURE  ((modbus_write_result_t)0x04U)
-#define MODBUS_WRITE_DEVICE_BUSY     ((modbus_write_result_t)0x06U)
-```
-
-WRITE_CHECKとGROUP_VALIDATEが返せる値は上記の5種類です。それ以外の値を返した場合は、生成parserが`MODBUS_WRITE_DEVICE_FAILURE`へ変換します。複数のcallbackが対象になる場合は、WRITE_CHECKをアドレス順、GROUP_VALIDATEをExcel上のグループ初出順に評価し、最初に返されたエラーを採用します。
-
-書込みscratchはModbus最大データ長と同じ252 byteを静的に確保します。受信処理とBUSY_REJECT setterは再入不可であり、main loopから直列に呼び出す前提です。
-
----
-
-### 6.3.生成されるファイル一覧
-
-本ツール実行後、選択した Excel と同じフォルダに以下の C/C ヘッダファイル群が出力されます。
-
-#### 6.3.1.レジスタ定義・アクセサ
-| ファイル | 役割 |
-|---------|--------------------------------------------|
-| `modbus_reg_map_slave.c/h` | レジスタのメタ情報テーブル（型、アドレス、Min/Max/Default、RAM 参照など） |
-| `modbus_reg_idx_slave.h` | `MODBUS_IDX_***` マクロで各レジスタのインデックスを一元管理 |
-| `modbus_reg_access_slave.c/h` | getter / setter / min-max 取得関数、およびビットマスク付き setter |
-| `modbus_reg_write_guard_slave.c/h` | `MB_BOOL`、BUSY_REJECT API、WRITE_CHECK/GROUP_VALIDATE宣言、typed snapshot |
-
-#### 6.3.2.更新通知
-
-| ファイル | 役割 |
-|---------|--------------------------------------------|
-| `modbus_reg_update_notify_slave.c/h` | `UPDATE_NOTIFY=TRUE`のレジスタに対する同期callback宣言と通知振り分け |
-
-旧schemaの`modbus_reg_edge_slave.c/h`または`modbus_reg_write_event_slave.c/h`が
-出力先に存在する場合は、再生成時に削除されます。`EDGE`と`WRITE_NOTIFY`列、
-および旧consume APIとの互換性はありません。
-
-#### 6.3.3.受信処理
-
-| ファイル | 役割 |
-|---------|--------------------------------------------|
-| `modbus_parser.c/h` | Read Holding Registers 応答の CRC 検証、値取り出し、レンジチェック、RAM 更新 |
+製品ファームウェアのビルドと実機確認は製品側で行います。

@@ -13,8 +13,8 @@
 <text x="44" y="215" font-size="21" fill="#172d43" font-weight="400" text-anchor="start">年・月・日・時・分・秒を一括書込み</text>
 <path d="M306 241 L306 263" fill="none" stroke="#738597" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)"/>
 <rect x="26" y="269" width="560" height="96" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
-<text x="44" y="298" font-size="16" fill="#994210" font-weight="700" text-anchor="start">① 自動生成：busy判定（2.3）</text>
-<text x="44" y="333" font-size="23" fill="#172d43" font-weight="400" text-anchor="start">編集中で書込み拒否が有効か？</text>
+<text x="44" y="298" font-size="16" fill="#994210" font-weight="700" text-anchor="start">① 自動生成：BUSY問い合わせ（2.3）</text>
+<text x="44" y="333" font-size="23" fill="#172d43" font-weight="400" text-anchor="start">アプリへ問い合わせ：編集中か？</text>
 <rect x="686" y="269" width="288" height="96" rx="12" fill="#fff7ed" stroke="#ea7b23" stroke-width="2.5"/>
 <text x="704" y="298" font-size="16" fill="#994210" font-weight="700" text-anchor="start">自動生成：ここで終了</text>
 <text x="704" y="333" font-size="23" fill="#172d43" font-weight="400" text-anchor="start">NG：busy</text>
@@ -41,6 +41,6 @@
 <text x="44" y="757" font-size="16" fill="#22613e" font-weight="700" text-anchor="start">④ アプリ実装：更新コールバック（2.4）</text>
 <text x="44" y="792" font-size="23" fill="#172d43" font-weight="400" text-anchor="start">RTCへ実際に書き込む</text>
 <text x="610" y="718" font-size="18" fill="#994210" font-weight="400" text-anchor="start">コールバックの呼出し配線は自動生成</text>
-<text x="26" y="859" font-size="19" fill="#526477" font-weight="400" text-anchor="start">アプリが用意する中心部分は、日時の検証とRTCへの書込み処理。</text>
+<text x="26" y="859" font-size="19" fill="#526477" font-weight="400" text-anchor="start">アプリは編集状態への回答、日時の検証、RTCへの反映を担当。</text>
 </g>
 </svg>
