@@ -212,25 +212,31 @@ test("address policy changes take effect on the next request without registratio
 
 
 // Execute the emitted parser and its real CRC/ACK/exception routines together.
-// The write handler is a boundary mock: a rejected format must never reach RAM
+// Read/write handlers are boundary mocks: a rejected format must never reach RAM
 // application, user validation, NVM dirty handling or update notifications.
 const parserConstants = Object.fromEntries([...parser.matchAll(
   /^#define\s+(\w+)\s+\((0x[\da-f]+|\d+)(?:UL|U)\)/gmi
 )].map(match => [match[1], Number(match[2])]));
-function writeParserFixture(writeResult = 0) {
+function parserFixture(writeResult = 0, readResult = 0) {
   const calls = {writes: [], notifications: [], sent: [], order: [], addresses: []};
+  const reads = [];
   const functions = [
     ["modbus_parse_and_reply", "rx_buf, len"],
     ["modbus_validate_crc", "frame, length"],
     ["modbus_append_crc", "frame, len_without_crc"],
     ["modbus_send_frame", "slave_addr, frame, length"],
     ["modbus_send_write_multi_ack", "slave_addr, start_addr, num_regs"],
+    ["modbus_send_write_single_ack", "slave_addr, addr, value"],
     ["modbus_send_exception_response", "slave_addr, function_code, exception_code"]
   ];
   const port = vm.runInNewContext(
     functions.map(([name, args]) => jsFunction(name, args)).join("\n") +
     "\n({parse: modbus_parse_and_reply});", {
       ...parserConstants, Uint8Array,
+      handle_modbus_read(address, start, quantity) {
+        reads.push({address, start, quantity});
+        return readResult;
+      },
       modbus_user_accept_slave_address(address) {
         calls.addresses.push(address);
         return address === 0 || address === 1 ? 1 : 0;
@@ -249,7 +255,7 @@ function writeParserFixture(writeResult = 0) {
         calls.order.push("send");
       }
     });
-  return {calls, parse: data => port.parse(data, data.length)};
+  return {calls, reads, parse: (data, length = data === null ? 0 : data.length) => port.parse(data, length)};
 }
 function writeRequest(quantity, {address = 1, byteCount = quantity * 2,
     payloadLength = quantity * 2} = {}) {
@@ -260,7 +266,7 @@ function writeRequest(quantity, {address = 1, byteCount = quantity * 2,
   return data;
 }
 function assertFormatRejected(data) {
-  const f = writeParserFixture();
+  const f = parserFixture();
   f.parse(data);
   assert.deepEqual(f.calls.writes, []);
   assert.deepEqual(f.calls.notifications, []);
@@ -271,7 +277,7 @@ function assertFormatRejected(data) {
 
 test("0x10 accepts 1, 2 and 123 registers with an exact request length", () => {
   for (const quantity of [1, 2, 123]) {
-    const f = writeParserFixture(), data = writeRequest(quantity), before = data.slice();
+    const f = parserFixture(), data = writeRequest(quantity), before = data.slice();
     f.parse(data);
     assert.deepEqual(f.calls.writes, [{start: 16, quantity,
       data: Array.from(data.slice(7, -2))}]);
@@ -315,12 +321,12 @@ test("0x10 rejects a 256-byte request with one trailing byte at the count limit"
 
 test("0x10 retains silent discard for oversized frames and corrupt CRCs", () => {
   for (const quantity of [123, 124]) {
-    const f = writeParserFixture(), data = writeRequest(quantity, {payloadLength: 248});
+    const f = parserFixture(), data = writeRequest(quantity, {payloadLength: 248});
     assert.equal(data.length, 257);
     f.parse(data);
     assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: []});
   }
-  const f = writeParserFixture(), data = writeRequest(2, {payloadLength: 5});
+  const f = parserFixture(), data = writeRequest(2, {payloadLength: 5});
   data[data.length - 1] ^= 1;
   f.parse(data);
   assert.deepEqual(f.calls.writes, []);
@@ -329,7 +335,7 @@ test("0x10 retains silent discard for oversized frames and corrupt CRCs", () => 
 });
 
 test("0x10 broadcast applies valid writes silently and rejects invalid formats silently", () => {
-  const f = writeParserFixture(), data = writeRequest(1, {address: 0});
+  const f = parserFixture(), data = writeRequest(1, {address: 0});
   f.parse(data);
   assert.equal(f.calls.writes.length, 1);
   assert.deepEqual(f.calls.notifications, [[16, 1]]);
@@ -337,7 +343,7 @@ test("0x10 broadcast applies valid writes silently and rejects invalid formats s
   assert.deepEqual(f.calls.order, ["write", "notify"]);
   for (const invalid of [writeRequest(1, {address: 0, payloadLength: 3}),
       writeRequest(0, {address: 0, payloadLength: 0})]) {
-    const rejected = writeParserFixture();
+    const rejected = parserFixture();
     rejected.parse(invalid);
     assert.deepEqual(rejected.calls.writes, []);
     assert.deepEqual(rejected.calls.notifications, []);
@@ -346,9 +352,119 @@ test("0x10 broadcast applies valid writes silently and rejects invalid formats s
 });
 
 test("0x10 retains write-handler errors after the format checks", () => {
-  const f = writeParserFixture(6);
+  const f = parserFixture(6);
   f.parse(writeRequest(1));
   assert.equal(f.calls.writes.length, 1);
   assert.deepEqual(f.calls.notifications, []);
   assert.deepEqual(f.calls.sent[0].slice(0, 3), [1, 0x90, 6]);
+});
+
+
+function fixedRequest(functionCode, {address = 1, start = 16, value = 1, length = 8} = {}) {
+  const data = new Uint8Array(length);
+  const header = [address, functionCode, start >>> 8, start & 255, value >>> 8, value & 255];
+  data.set(header.slice(0, Math.max(0, length - 2)));
+  if (length >= 2) echo.append(data, length - 2);
+  return data;
+}
+function assertFixedRejected(data) {
+  const f = parserFixture(), before = data.slice();
+  f.parse(data);
+  assert.deepEqual(f.reads, []);
+  assert.deepEqual(f.calls.writes, []);
+  assert.deepEqual(f.calls.notifications, []);
+  const expected = new Uint8Array([1, data[1] | 0x80, 3, 0, 0]);
+  echo.append(expected, 3);
+  assert.deepEqual(f.calls.sent, [Array.from(expected)]);
+  assert.deepEqual(data, before);
+}
+
+for (const functionCode of [0x03, 0x06]) {
+  const label = "0x" + functionCode.toString(16).padStart(2, "0");
+  test(label + " rejects trailing bytes with a valid CRC before any read or write", () => {
+    for (const length of [9, 10, 255, 256]) {
+      assertFixedRejected(fixedRequest(functionCode, {length}));
+    }
+  });
+  test(label + " retains silent discard for null, short and oversized requests", () => {
+    for (const length of [0, 1, 7, 257]) {
+      const f = parserFixture();
+      f.parse(fixedRequest(functionCode, {length}));
+      assert.deepEqual(f.reads, []);
+      assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: []});
+    }
+    const f = parserFixture();
+    f.parse(null, 8);
+    assert.deepEqual(f.reads, []);
+    assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: []});
+  });
+  test(label + " discards invalid CRCs before fixed-length checks", () => {
+    for (const length of [8, 9, 256]) {
+      const f = parserFixture(), data = fixedRequest(functionCode, {length});
+      data[data.length - 1] ^= 1;
+      f.parse(data);
+      assert.deepEqual(f.reads, []);
+      assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: [1]});
+    }
+  });
+  test(label + " rejects malformed broadcasts silently before the handlers", () => {
+    for (const length of [9, 256]) {
+      const f = parserFixture();
+      f.parse(fixedRequest(functionCode, {address: 0, length}));
+      assert.deepEqual(f.reads, []);
+      assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: [0]});
+    }
+  });
+  test(label + " retains address-policy rejection before format errors", () => {
+    const f = parserFixture();
+    f.parse(fixedRequest(functionCode, {address: 2, length: 9}));
+    assert.deepEqual(f.reads, []);
+    assert.deepEqual(f.calls, {writes: [], notifications: [], sent: [], order: [], addresses: [2]});
+  });
+}
+
+test("0x03 dispatches exact requests and retains count limits", () => {
+  for (const quantity of [1, 125]) {
+    const f = parserFixture(), data = fixedRequest(3, {value: quantity}), before = data.slice();
+    f.parse(data);
+    assert.deepEqual(f.reads, [{address: 1, start: 16, quantity}]);
+    assert.deepEqual(f.calls.writes, []);
+    assert.deepEqual(f.calls.notifications, []);
+    assert.deepEqual(data, before);
+  }
+  for (const quantity of [0, 126, 65535]) assertFixedRejected(fixedRequest(3, {value: quantity}));
+});
+
+test("0x06 writes exact requests and emits an eight-byte ACK before notification", () => {
+  for (const value of [0, 0x1234, 0xffff]) {
+    const f = parserFixture(), data = fixedRequest(6, {start: 0x1234, value}), before = data.slice();
+    f.parse(data);
+    assert.deepEqual(f.reads, []);
+    assert.deepEqual(f.calls.writes, [{start: 0x1234, quantity: 1, data: [value >>> 8, value & 255]}]);
+    assert.deepEqual(f.calls.notifications, [[0x1234, 1]]);
+    assert.deepEqual(f.calls.sent, [Array.from(data)]);
+    assert.deepEqual(f.calls.order, ["write", "send", "notify"]);
+    assert.deepEqual(data, before);
+  }
+});
+
+test("0x06 retains silent application and notification for valid broadcasts", () => {
+  const f = parserFixture();
+  f.parse(fixedRequest(6, {address: 0, value: 0x1234}));
+  assert.deepEqual(f.calls.writes, [{start: 16, quantity: 1, data: [0x12, 0x34]}]);
+  assert.deepEqual(f.calls.notifications, [[16, 1]]);
+  assert.deepEqual(f.calls.sent, []);
+  assert.deepEqual(f.calls.order, ["write", "notify"]);
+});
+
+test("0x03 and 0x06 retain handler errors after valid fixed-length requests", () => {
+  const read = parserFixture(0, -1);
+  read.parse(fixedRequest(3));
+  assert.deepEqual(read.reads, [{address: 1, start: 16, quantity: 1}]);
+  assert.deepEqual(read.calls.sent[0].slice(0, 3), [1, 0x83, 2]);
+  const write = parserFixture(6);
+  write.parse(fixedRequest(6));
+  assert.equal(write.calls.writes.length, 1);
+  assert.deepEqual(write.calls.notifications, []);
+  assert.deepEqual(write.calls.sent[0].slice(0, 3), [1, 0x86, 6]);
 });
