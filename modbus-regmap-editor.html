@@ -1568,7 +1568,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
         switch (function)
         {
             case MODBUS_FUNC_READ_HOLDING_REGS:  /* 0x03: Read Holding Registers */
-                if (len >= MODBUS_MIN_FRAME_LENGTH)
+                if (len == MODBUS_MIN_FRAME_LENGTH)
                 {
                     start_addr = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | rx_buf[3]);
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
@@ -1592,7 +1592,7 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                 break;
 
             case MODBUS_FUNC_WRITE_SINGLE_REG:  /* 0x06: Preset Single Register */
-            	if (len >= MODBUS_MIN_FRAME_LENGTH)
+                if (len == MODBUS_MIN_FRAME_LENGTH)
             	{
             		start_addr  = (uint16_t)(((uint16_t)rx_buf[2] << 8U) | rx_buf[3]);
 
