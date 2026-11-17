@@ -246,6 +246,7 @@ const PARSER_SOURCE = String.raw`#include "modbus_parser.h"
 #define MODBUS_MAX_FRAME_LENGTH            (256U)
 #define MODBUS_SINGLE_REG_DATA_LENGTH      (4U)  /* 2 bytes address + 2 bytes data */
 #define MODBUS_WRITE_MULTI_HEADER_LENGTH   (7U)  /* 7 = addr(1) + func(1) + start(2) + count(2) + byte count(1) */
+#define MODBUS_WRITE_MULTI_MAX_REGS        (123U)
 
 #define MODBUS_REG_SIZE_BYTES    (2U)
 #define MODBUS_MAX_DATA_LENGTH   (252U)
@@ -544,9 +545,9 @@ void modbus_parse_and_reply(const uint8_t *rx_buf, uint16_t len)
                     num_regs   = (uint16_t)(((uint16_t)rx_buf[4] << 8U) | (uint16_t)rx_buf[5]);
 
                     if ((num_regs > 0U) &&
-                        (num_regs <= (MODBUS_MAX_DATA_LENGTH / MODBUS_REG_SIZE_BYTES)) &&
+                        (num_regs <= MODBUS_WRITE_MULTI_MAX_REGS) &&
                         (rx_buf[6] == (uint8_t)(num_regs * MODBUS_REG_SIZE_BYTES)) &&
-                        (len >= (uint16_t)(MODBUS_WRITE_MULTI_HEADER_LENGTH +
+                        (len == (uint16_t)(MODBUS_WRITE_MULTI_HEADER_LENGTH +
                                           (num_regs * MODBUS_REG_SIZE_BYTES) + 2U)))
                     {
                     	data = &rx_buf[7];
