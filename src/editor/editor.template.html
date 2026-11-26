@@ -108,7 +108,7 @@ main.wrap {
 .table-wrap:focus-visible { outline: 2px solid #16857a; outline-offset: -2px; }
 table { border-spacing: 0; width: 100%; text-align: left; }
 .registers { min-width: 850px; table-layout: fixed; }
-.enum-cell { padding-inline: 7px; background: #f0f8f5; overflow-wrap: anywhere; }
+.enum-cell { padding-inline: 7px; overflow-wrap: anywhere; }
 .enum-cell .badge { padding-inline: 5px; }
 .bitset-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
@@ -240,7 +240,7 @@ textarea { resize: vertical; }
     </div>
     <div class="actions html-actions">
       <span id="html-save-state"></span>
-      <button type="button" id="open-json">JSONを開く</button>
+      <button type="button" id="open-json">JSONをインポート</button>
       <button type="button" id="restore-html">保存済みを読み直す</button>
       <button type="button" id="save-html" aria-keyshortcuts="Control+S" title="Ctrl+S">HTMLに上書き保存</button>
     </div>
@@ -253,10 +253,10 @@ textarea { resize: vertical; }
     <div>
       <div class="eyebrow">REGMAP EDITOR <span>UI試作</span></div>
       <h1 id="title">レジスタマップ</h1>
-      <p>レジスタ定義を表で編集し、JSONに保存できます。</p>
+      <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。</p>
     </div>
     <div class="actions" id="register-actions">
-      <button type="button" id="save-json">JSONを保存</button>
+      <button type="button" id="save-json" title="外部ツールでの利用や、新版HTMLへの移行用">JSONをエクスポート</button>
       <button type="button" class="primary" id="open-code">C/H 一括生成</button>
     </div>
   </section>

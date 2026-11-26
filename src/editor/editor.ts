@@ -304,7 +304,7 @@ $("save-json").addEventListener("click", () => {
   const filename = sourceName === "サンプル" || sourceName === "RegisterTable.json" ?
     "modbus-regmap.json" : sourceName;
   download(filename, JSON.stringify(validated.documentValue, null, 2) + "\n", "application/json");
-  message("JSONのダウンロードを開始しました。");
+  message("JSONのエクスポートを開始しました。");
 });
 $("open-code").addEventListener("click", () => {
   const validated = validatedForExport();
