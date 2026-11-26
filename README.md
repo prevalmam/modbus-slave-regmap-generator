@@ -146,7 +146,26 @@ BUSYは受付時点の状態、`writeCheck`は現在値と候補値を含めた�
 
 生成器を更新するときは、旧HTMLでJSONをエクスポートし、新HTMLへインポートしてHTMLに保存します。製品側に派生JSONを置く場合は、保存した正本HTMLから生成し、利用先の更新時に同期します。
 
-### 4.2 入力チェックと再生成
+### 4.2 アドレスレスの内部専用項目
+
+アドレスに`-`を指定すると、Modbus通信へ公開しない内部専用項目になります。R/W欄も自動で`-`になります。数値アドレスへ戻すと、Rを初期選択にします。
+
+| アドレス | NVMオフセット | 用途 |
+|---|---|---|
+| 数値 | `-` | Modbus公開・RAM保持 |
+| 数値 | 数値 | Modbus公開・永続化 |
+| `-` | `-` | 内部専用・RAM保持 |
+| `-` | 数値 | 内部専用・永続化 |
+
+内部専用項目も、型・値域・初期値、enum・ビット定義・配列・文字列、名前付きgetter／setter、初期化グループを既存の仕組みで扱います。NVMオフセットを指定した項目は、保存用スナップショットの回収と復元の対象になります。既存の型・配列長・NVM範囲の検査を適用します。
+
+`updateNotify`を有効にすると、内部setterの正常成立時に`MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET`で更新通知します。BUSY・WRITE_CHECK・GROUP_VALIDATEは通信向けの設定なので、内部専用項目では解除します。矛盾した設定、アドレスレスの予約領域、名前やNVM範囲の重複は入力エラーになります。
+
+生成CのRAM・初期値・値域・NVM情報は、既存の共通管理表に保持します。内部専用項目は`ACCESS_INTERNAL`で区別し、通信の読出し・単発／一括書込み・通信由来の更新通知から除外します。管理表のアドレス欄には実装上の未使用値0が入りますが、通信対象の判定を先に行うため、実在するアドレス0とも共存します。データ構造のフィールド追加やNVM配置の自動変更は行いません。
+
+JSONの`address`は数値または`"-"`です。新規エクスポートはschema 6を使用し、既存schema 5の定義も読み込めます。新版HTMLへ移行するときは、旧HTMLからJSONをエクスポートし、新HTMLでインポートしてHTML保存します。
+
+### 4.3 入力チェックと再生成
 
 Modbus番地の占有範囲、NVMの占有範囲、名前の重複、Defaultと値域、参照先のenum・ビット定義・初期化グループなどを検査します。数値は10進数、番地やオフセットなどの整数欄は`0x`始まりの16進数も使用できます。
 
@@ -367,7 +386,7 @@ void product_save_poll(void)
 
 ### 6.1 JSONの構成とレジスタ表
 
-定義JSONは`format: "modbus-slave-regmap"`、`schemaVersion: 5`です。トップレベルに`config`、`lengthDefs`、`enums`、`bitsetDefs`、`resetGroupDefs`、`registers`を保存します。
+定義JSONは`format: "modbus-slave-regmap"`、`schemaVersion: 6`です。トップレベルに`config`、`lengthDefs`、`enums`、`bitsetDefs`、`resetGroupDefs`、`registers`を保存します。
 
 | 要素 | 役割 |
 |---|---|
@@ -383,11 +402,11 @@ void product_save_poll(void)
 
 | 要素 | 例 | 意味 |
 |---|---|---|
-| `address` | `1000` | 0〜65535のModbus開始番地 |
+| `address` | `1000`、`"-"` | 0〜65535のModbus開始番地。`"-"`は内部専用 |
 | `name` | `device_mode` | C識別子・アクセサ名・コールバック名の基になる名前 |
 | `type` | `uint16_t` | `uint16_t`／`uint32_t`／`float`／`string`／`reserved` |
 | `length` | `1`、`"NAME_LEN"` | 要素数、文字列の固定長バイト数、予約レジスタ数。通常項目は配列長定義も参照可能 |
-| `access` | `"RW"` | 通信側の`RO`／`RW`／`WO`。予約領域は`"-"` |
+| `access` | `"RW"` | 通信側の`RO`／`RW`／`WO`。予約領域・内部専用は`"-"` |
 | `valueDomain` | `{kind: "range", min: 0, max: 3, default: 1}` | 数値範囲、enum、ビット、文字列、予約の指定 |
 | `nvmOffset` | `16`、`"-"` | 保存データ先頭からのバイトオフセット。`"-"`はRAM専用 |
 | `updateNotify` | `true` | 正常な通信write／内部setterの成立通知 |
@@ -402,7 +421,7 @@ void product_save_poll(void)
 ```json
 {
   "format": "modbus-slave-regmap",
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "config": {"slaveAddress": 1, "nvmSize": 256},
   "lengthDefs": [],
   "enums": [],
@@ -466,7 +485,7 @@ if (get_device_name_copy(name_copy, sizeof(name_copy)) != 0)
 
 #### 6.2.3 番地と保存オフセット
 
-Modbus番地は16ビットレジスタ単位、`nvmOffset`はバイト単位です。数値を同じ値に揃える必要はありません。保存領域は`config.nvmSize`内へ収め、ほかの保存対象と重複しないよう配置します。エディターは重複・範囲超過をエラー、型サイズ境界に揃っていない保存オフセットを警告として扱います。
+Modbus番地は16ビットレジスタ単位、内部専用の番地は`-`、`nvmOffset`はバイト単位です。数値を同じ値に揃える必要はありません。保存領域は`config.nvmSize`内へ収め、ほかの保存対象と重複しないよう配置します。エディターは重複・範囲超過をエラー、型サイズ境界に揃っていない保存オフセットを警告として扱います。
 
 通信は各定義項目の全体を扱います。複数項目をまとめた要求も扱えますが、32ビット値や配列など一項目の途中から開始したり、途中で終えたりする範囲は拒否します。
 
@@ -623,6 +642,8 @@ node tools/export-json.cjs product.json output-directory
 ```
 
 製品ファームウェアのビルドと実機確認は製品側で行います。
+
+内部専用項目の追加検証は`node --test tools/test-editor-internal.cjs`で実行します。アドレス0との共存、範囲読出し、単発／一括書込み、内部通知、RAM／NVM保持と復元、初期化、JSON／HTMLの保存状態、および画面でのR/W自動切替を確認します。生成Cの対象環境でのC89構文・静的解析と、ファームウェアのビルド・実機確認は区別します。
 
 ## 8. 開発クレジット
 

@@ -14,7 +14,7 @@ test("current schema roundtrip retains definitions and multiple memberships", ()
  p.resetGroupDefs.push({id: "factory", label: "Factory"});
  p.registers[0].resetGroups = ["settings", "factory"];
  const {doc} = generate(p);
- assert.equal(doc.schemaVersion, 5);
+ assert.equal(doc.schemaVersion, 6);
  const {doc: again} = generate(core.decodeProject(plain(doc)).project);
  assert.deepEqual(plain(again), plain(doc));
 });

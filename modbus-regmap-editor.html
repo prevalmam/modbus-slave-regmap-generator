@@ -254,7 +254,7 @@ textarea { resize: vertical; }
     <div>
       <div class="eyebrow">REGMAP EDITOR <span>UI試作</span></div>
       <h1 id="title">レジスタマップ</h1>
-      <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。</p>
+      <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
     <div class="actions" id="register-actions">
       <button type="button" id="save-json" title="外部ツールでの利用や、新版HTMLへの移行用">JSONをエクスポート</button>
@@ -478,7 +478,7 @@ textarea { resize: vertical; }
 <script>
 "use strict";
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"];
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"];
@@ -716,8 +716,9 @@ function decodeProject(input) {
     }
     const { format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs } = documentValue;
     const legacy = schemaVersion === 1;
-    const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
-    const hasResetGroups = schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
+    const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
+    const hasResetGroups = schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
+    const hasBitsets = schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
     const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
     const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
             (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
@@ -728,7 +729,7 @@ function decodeProject(input) {
     }
     if (hasDomains && !isList(enums))
         throw Error(invalid);
-    if (schemaVersion === SCHEMA_VERSION && !isList(bitsetDefs))
+    if (hasBitsets && !isList(bitsetDefs))
         throw Error(invalid);
     if (hasResetGroups && (!isList(resetGroupDefs) ||
         !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
@@ -738,7 +739,7 @@ function decodeProject(input) {
     const project = {
         config: { slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize) },
         enums: definitions,
-        bitsetDefs: schemaVersion === SCHEMA_VERSION && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
+        bitsetDefs: hasBitsets && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
         resetGroupDefs: hasResetGroups ?
             resetGroupDefs.map(group => ({ ...group })) : [],
         lengthDefs: lengthDefs.map(row => {
@@ -756,7 +757,7 @@ function decodeProject(input) {
                 const domain = row.valueDomain;
                 if (!isObject(domain))
                     throw Error(invalid);
-                if (schemaVersion === SCHEMA_VERSION && domain.kind === "bitset" &&
+                if (hasBitsets && domain.kind === "bitset" &&
                     typeof domain.bitsetId === "string" && typeof domain.default === "number") {
                     return { ...draftRow({ ...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default }),
                         bitsetDomain: { kind: "bitset", bitsetId: domain.bitsetId, default: domain.default } };
@@ -818,7 +819,7 @@ function inspectProject(project) {
         if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_"))
             issue("配列長定義が生成APIの予約名です: " + name);
         const length = unsigned(entry.length);
-        if (name === "NVM_MAX_ENTRY_SIZE_BYTES")
+        if (name === "NVM_MAX_ENTRY_SIZE_BYTES" || name === "ACCESS_INTERNAL")
             issue("配列長定義 " + name + " は生成器の予約名です。");
         if (!isName(name))
             issue("配列長定義 " + (index + 1) + " 行目の名前が無効です。");
@@ -838,7 +839,7 @@ function inspectProject(project) {
         "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
         "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
         "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
-        "NVM_MAX_ENTRY_SIZE_BYTES",
+        "NVM_MAX_ENTRY_SIZE_BYTES", "ACCESS_INTERNAL",
         ...lengths.keys(), ...project.registers.map(row => row.name.trim())
     ]);
     for (const definition of project.enums) {
@@ -905,7 +906,7 @@ function inspectProject(project) {
         const name = row.name.trim();
         if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_"))
             issue("変数名が生成APIの予約名です: " + name, index, "name");
-        if (name === "NVM_MAX_ENTRY_SIZE_BYTES")
+        if (name === "NVM_MAX_ENTRY_SIZE_BYTES" || name === "ACCESS_INTERNAL")
             issue("変数名 " + name + " は生成器の予約名です。", index, "name");
         const label = (index + 1) + " 行目" + (name ? " " + name : "");
         const fail = (field, message) => issue(label + "　" + message, index, field);
@@ -925,9 +926,14 @@ function inspectProject(project) {
             fail("name", "変数名が重複しています。");
         if (!reserved)
             names.add(name);
-        const address = unsigned(row.address);
-        if (address === null || address > 65535)
-            fail("address", "アドレスは0〜65535の整数にしてください。");
+        const internal = row.address.trim() === UNUSED;
+        const address = internal ? UNUSED : unsigned(row.address);
+        if (address === null || (typeof address === "number" && address > 65535))
+            fail("address", "アドレスは0〜65535の整数、内部専用は - を指定してください。");
+        if (internal && reserved)
+            fail("address", "予約領域にはModbusアドレスを指定してください。");
+        if (internal && row.access !== UNUSED)
+            fail("access", "内部専用の権限は - を指定してください。");
         const literalLength = unsigned(row.length);
         const length = literalLength ?? (reserved ? null : lengths.get(row.length.trim())) ?? null;
         const validLength = length !== null && length >= 1 && length <= 65536 && (!string || (length >= 2 && length % 2 === 0));
@@ -937,19 +943,22 @@ function inspectProject(project) {
         const bytes = validLength && type !== null ? length * TYPE_BYTES[type] : null;
         const registerCount = bytes === null ? null : bytes / 2;
         counts.push(registerCount);
-        if (address !== null && address <= 65535 && registerCount !== null) {
+        if (typeof address === "number" && address <= 65535 && registerCount !== null) {
             if (address + registerCount > 65536)
                 fail("address", "占有する範囲が65535を超えています。");
             else
                 addressRanges.push({ start: address, end: address + registerCount, index, label });
         }
-        const access = reserved ? UNUSED : isOneOf(ACCESS, row.access) ? row.access : null;
+        const access = reserved || internal ? UNUSED : isOneOf(ACCESS, row.access) ? row.access : null;
         if (access === null)
             fail("access", "アクセス権限を選んでください。");
         if (!reserved && access === "RO" && (row.busyReject || row.writeCheck)) {
             fail("detail", "Rの行ではBUSY拒否と書き込み判定を解除してください。");
         }
         const groupValidate = reserved ? UNUSED : row.groupValidate.trim();
+        if (internal && (row.busyReject || row.writeCheck || groupValidate !== UNUSED)) {
+            fail("detail", "内部専用では通信向けのBUSY・書込み判定・グループ検証を解除してください。");
+        }
         if (groupValidate !== UNUSED && !isName(groupValidate)) {
             fail("detail", "グループ検証名を指定してください。使わない場合は - を入力します。");
         }
@@ -1133,7 +1142,8 @@ typedef enum {
 typedef enum {
     ACCESS_READ,
     ACCESS_WRITE,
-    ACCESS_READWRITE
+    ACCESS_READWRITE,
+    ACCESS_INTERNAL
 } access_mode_t;
 
 typedef struct {
@@ -1424,6 +1434,10 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     	uint16_t total_regs;
 
         entry = &g_reg_table_slave[i];
+        if (entry->access == ACCESS_INTERNAL)
+        {
+            continue;
+        }
         addr = entry->modbus_addr;
         elemsize = (uint16_t)(entry->size / entry->length);
         total_regs = (uint16_t)(((uint32_t)elemsize * entry->length) / 2U);
@@ -1849,7 +1863,8 @@ static const reg_table_entry_t *find_entry_at_address(
 
     for (i = 0U; i < g_reg_table_slave_size; ++i)
     {
-        if (g_reg_table_slave[i].modbus_addr == address)
+        if ((g_reg_table_slave[i].access != ACCESS_INTERNAL) &&
+            (g_reg_table_slave[i].modbus_addr == address))
         {
             *table_index = i;
             return &g_reg_table_slave[i];
@@ -2079,7 +2094,8 @@ static int handle_modbus_multi_write(uint16_t start_addr,
         entry = find_entry_at_address(expected, &table_index);
         if ((entry == (const reg_table_entry_t *)0) ||
             (entry->type == REG_TYPE_RESERVED) ||
-            (entry->access == ACCESS_READ))
+            (entry->access == ACCESS_READ) ||
+            (entry->access == ACCESS_INTERNAL))
         {
             return MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
         }
@@ -2368,7 +2384,8 @@ function generatorEntries(project) {
         else {
             values = { min: UNUSED, max: UNUSED, default: valueDomain.kind === "string" ? valueDomain.default : UNUSED };
         }
-        return { ...fields, ...values, definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
+        return { ...fields, ...values, address: row.address === UNUSED ? 0 : row.address, internal: row.address === UNUSED,
+            definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
             registerCount: bytes / 2,
             enumType: C_TYPES[row.type] + (array ? "_ARRAY" : "") };
     });
@@ -2440,7 +2457,7 @@ function generateRegisterMap(project, entries) {
             throw Error("生成用の値と型が一致しません。" + name);
         }
         tableRows.push("    {", ...[entry.address, offset, size, defaults, minimum, maximum, ram,
-            entry.enumType, count, C_ACCESS[entry.access]].map(value => "        " + value + ","), "    },");
+            entry.enumType, count, entry.internal ? "ACCESS_INTERNAL" : C_ACCESS[entry.access]].map(value => "        " + value + ","), "    },");
     }
     return {
         "modbus_reg_map_slave.h": header,
@@ -2726,6 +2743,7 @@ function generateAccess(entries) {
 }
 function generateNotifications(entries) {
     const notified = entries.filter(entry => entry.updateNotify).sort((a, b) => a.address - b.address);
+    const masterNotified = notified.filter(entry => !entry.internal);
     const header = [`#ifndef MODBUS_REG_UPDATE_NOTIFY_SLAVE_H
 #define MODBUS_REG_UPDATE_NOTIFY_SLAVE_H
 
@@ -2749,9 +2767,9 @@ void modbus_reg_update_notify_master_write(uint16_t start_addr,
     for (const entry of notified) {
         header.push("", `extern void modbus_user_${entry.name}_updated(`, "    modbus_reg_update_source_t source);");
     }
-    if (notified.length) {
+    if (masterNotified.length) {
         source.push("    const uint32_t end_addr = (uint32_t)start_addr + num_regs;", "");
-        for (const entry of notified) {
+        for (const entry of masterNotified) {
             source.push(`    if (((uint32_t)start_addr <= ${entry.address}UL) &&
         (end_addr >= ${entry.address + entry.registerCount}UL))
     {
@@ -4105,11 +4123,12 @@ function optionList(values, selected, display = {}) {
 }
 function registerMarkup(row, index) {
     const reserved = row.type === "reserved", string = row.type === "string";
+    const internal = row.address.trim() === UNUSED;
     const label = (key) => LABELS[key] + " " + (index + 1) + " 行目";
     const attrs = (key) => `data-field="${key}" aria-label="${label(key)}"`;
     const input = (key, disabled = false, placeholder = "未入力") => `<td><input ${attrs(key)} value="${disabled ? UNUSED : escapeHtml(row[key])}" placeholder="${escapeHtml(placeholder)}"${disabled ? " disabled" : ""}></td>`;
     const type = `<td><select ${attrs("type")}>${optionList(TYPES, row.type, { reserved: "予約領域" })}</select></td>`;
-    const access = reserved ? input("access", true) :
+    const access = reserved || internal ? input("access", true) :
         `<td><select ${attrs("access")}>${optionList(ACCESS, row.access, { RO: "R", WO: "W" })}</select></td>`;
     const selection = row.enumDomain;
     const definition = selection && project.enums.find(item => item.id === selection.enumId);
@@ -4305,11 +4324,21 @@ $("register-body").addEventListener("input", event => {
     if (!isOneOf(TABLE_FIELDS, field))
         return;
     const previousType = row.type;
+    const wasInternal = row.address.trim() === UNUSED;
     row[field] = target.value;
+    if (field === "address" && wasInternal !== (row.address.trim() === UNUSED)) {
+        row.access = row.address.trim() === UNUSED ? UNUSED : "RO";
+        const caret = target instanceof HTMLInputElement ? target.selectionStart : null;
+        renderTable();
+        const addressInput = $("register-body").querySelector(`tr[data-index="${index}"] [data-field="address"]`);
+        addressInput?.focus({ preventScroll: true });
+        if (caret !== null)
+            addressInput?.setSelectionRange(caret, caret);
+    }
     if (field === "type") {
         if (row.type !== "reserved" && (previousType === "string") !== (row.type === "string"))
             row.default = "";
-        if (row.type !== "reserved" && !isOneOf(ACCESS, row.access))
+        if (row.type !== "reserved" && row.address.trim() !== UNUSED && !isOneOf(ACCESS, row.access))
             row.access = "RW";
         renderTable();
         $("register-body").querySelector(`tr[data-index="${index}"] [data-field="type"]`)?.focus({ preventScroll: true });

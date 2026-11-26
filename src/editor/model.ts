@@ -1,7 +1,7 @@
 "use strict";
 
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"] as const;
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"] as const;
@@ -43,7 +43,7 @@ type DraftProject = {
   registers: DraftRegister[];
 };
 type RegisterDefinition = RegisterFlags & RegisterNotes & {
-  address: number;
+  address: number | Unused;
   name: string;
   type: RegisterType;
   length: number | string;
@@ -298,8 +298,9 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   }
   const {format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs} = documentValue;
   const legacy = schemaVersion === 1;
-  const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
-  const hasResetGroups = schemaVersion === 4 || schemaVersion === SCHEMA_VERSION;
+  const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
+  const hasResetGroups = schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
+  const hasBitsets = schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
   const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
   const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
     (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
@@ -310,7 +311,7 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   }
 
   if (hasDomains && !isList(enums)) throw Error(invalid);
-  if (schemaVersion === SCHEMA_VERSION && !isList(bitsetDefs)) throw Error(invalid);
+  if (hasBitsets && !isList(bitsetDefs)) throw Error(invalid);
   if (hasResetGroups && (!isList(resetGroupDefs) ||
       !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
     throw Error(invalid);
@@ -319,7 +320,7 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   const project: DraftProject = {
     config: {slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize)},
     enums: definitions,
-    bitsetDefs: schemaVersion === SCHEMA_VERSION && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
+    bitsetDefs: hasBitsets && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
     resetGroupDefs: hasResetGroups ?
       (resetGroupDefs as ResetGroupDefinition[]).map(group => ({...group})) : [],
     lengthDefs: lengthDefs.map(row => {
@@ -333,7 +334,7 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
       if (hasDomains) {
         const domain = row.valueDomain;
         if (!isObject(domain)) throw Error(invalid);
-        if (schemaVersion === SCHEMA_VERSION && domain.kind === "bitset" &&
+        if (hasBitsets && domain.kind === "bitset" &&
             typeof domain.bitsetId === "string" && typeof domain.default === "number") {
           return {...draftRow({...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default}),
             bitsetDomain: {kind: "bitset", bitsetId: domain.bitsetId, default: domain.default}};
@@ -391,7 +392,7 @@ function inspectProject(project: DraftProject): Inspection {
     const name = entry.name.trim();
     if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_")) issue("配列長定義が生成APIの予約名です: " + name);
     const length = unsigned(entry.length);
-    if (name === "NVM_MAX_ENTRY_SIZE_BYTES") issue("配列長定義 " + name + " は生成器の予約名です。");
+    if (name === "NVM_MAX_ENTRY_SIZE_BYTES" || name === "ACCESS_INTERNAL") issue("配列長定義 " + name + " は生成器の予約名です。");
     if (!isName(name)) issue("配列長定義 " + (index + 1) + " 行目の名前が無効です。");
     else if (lengths.has(name)) issue("配列長定義 " + name + " が重複しています。");
     if (length === null || length < 1 || length > 65536) {
@@ -408,7 +409,7 @@ function inspectProject(project: DraftProject): Inspection {
     "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
     "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
     "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
-    "NVM_MAX_ENTRY_SIZE_BYTES",
+    "NVM_MAX_ENTRY_SIZE_BYTES", "ACCESS_INTERNAL",
     ...lengths.keys(), ...project.registers.map(row => row.name.trim())
   ]);
   for (const definition of project.enums) {
@@ -467,7 +468,7 @@ function inspectProject(project: DraftProject): Inspection {
     const errorCount = errors.length;
     const name = row.name.trim();
     if (NVM_API_SYMBOLS.has(name) || busyCallbackSymbols.has(name) || name.startsWith("MODBUS_RESET_GROUP_")) issue("変数名が生成APIの予約名です: " + name, index, "name");
-    if (name === "NVM_MAX_ENTRY_SIZE_BYTES") issue("変数名 " + name + " は生成器の予約名です。", index, "name");
+    if (name === "NVM_MAX_ENTRY_SIZE_BYTES" || name === "ACCESS_INTERNAL") issue("変数名 " + name + " は生成器の予約名です。", index, "name");
     const label = (index + 1) + " 行目" + (name ? " " + name : "");
     const fail = (field: string, message: string) => issue(label + "　" + message, index, field);
     const type = isOneOf(TYPES, row.type) ? row.type : null;
@@ -482,8 +483,11 @@ function inspectProject(project: DraftProject): Inspection {
     else if (!reserved && names.has(name)) fail("name", "変数名が重複しています。");
     if (!reserved) names.add(name);
 
-    const address = unsigned(row.address);
-    if (address === null || address > 65535) fail("address", "アドレスは0〜65535の整数にしてください。");
+    const internal = row.address.trim() === UNUSED;
+    const address = internal ? UNUSED : unsigned(row.address);
+    if (address === null || (typeof address === "number" && address > 65535)) fail("address", "アドレスは0〜65535の整数、内部専用は - を指定してください。");
+    if (internal && reserved) fail("address", "予約領域にはModbusアドレスを指定してください。");
+    if (internal && row.access !== UNUSED) fail("access", "内部専用の権限は - を指定してください。");
     const literalLength = unsigned(row.length);
     const length = literalLength ?? (reserved ? null : lengths.get(row.length.trim())) ?? null;
     const validLength = length !== null && length >= 1 && length <= 65536 && (!string || (length >= 2 && length % 2 === 0));
@@ -492,17 +496,20 @@ function inspectProject(project: DraftProject): Inspection {
     const bytes = validLength && type !== null ? length * TYPE_BYTES[type] : null;
     const registerCount = bytes === null ? null : bytes / 2;
     counts.push(registerCount);
-    if (address !== null && address <= 65535 && registerCount !== null) {
+    if (typeof address === "number" && address <= 65535 && registerCount !== null) {
       if (address + registerCount > 65536) fail("address", "占有する範囲が65535を超えています。");
       else addressRanges.push({start: address, end: address + registerCount, index, label});
     }
 
-    const access = reserved ? UNUSED : isOneOf(ACCESS, row.access) ? row.access : null;
+    const access = reserved || internal ? UNUSED : isOneOf(ACCESS, row.access) ? row.access : null;
     if (access === null) fail("access", "アクセス権限を選んでください。");
     if (!reserved && access === "RO" && (row.busyReject || row.writeCheck)) {
       fail("detail", "Rの行ではBUSY拒否と書き込み判定を解除してください。");
     }
     const groupValidate = reserved ? UNUSED : row.groupValidate.trim();
+    if (internal && (row.busyReject || row.writeCheck || groupValidate !== UNUSED)) {
+      fail("detail", "内部専用では通信向けのBUSY・書込み判定・グループ検証を解除してください。");
+    }
     if (groupValidate !== UNUSED && !isName(groupValidate)) {
       fail("detail", "グループ検証名を指定してください。使わない場合は - を入力します。");
     }

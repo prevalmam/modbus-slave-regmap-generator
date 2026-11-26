@@ -148,11 +148,12 @@ function optionList(values: readonly string[], selected: string, display: Record
 
 function registerMarkup(row: DraftRegister, index: number) {
   const reserved = row.type === "reserved", string = row.type === "string";
+  const internal = row.address.trim() === UNUSED;
   const label = (key: TableField) => LABELS[key] + " " + (index + 1) + " 行目";
   const attrs = (key: TableField) => `data-field="${key}" aria-label="${label(key)}"`;
   const input = (key: TableField, disabled = false, placeholder = "未入力") => `<td><input ${attrs(key)} value="${disabled ? UNUSED : escapeHtml(row[key])}" placeholder="${escapeHtml(placeholder)}"${disabled ? " disabled" : ""}></td>`;
   const type = `<td><select ${attrs("type")}>${optionList(TYPES, row.type, {reserved: "予約領域"})}</select></td>`;
-  const access = reserved ? input("access", true) :
+  const access = reserved || internal ? input("access", true) :
     `<td><select ${attrs("access")}>${optionList(ACCESS, row.access, {RO: "R", WO: "W"})}</select></td>`;
   const selection = row.enumDomain;
   const definition = selection && project.enums.find(item => item.id === selection.enumId);
@@ -348,10 +349,19 @@ $("register-body").addEventListener("input", event => {
   if (!row) return;
   if (!isOneOf(TABLE_FIELDS, field)) return;
   const previousType = row.type;
+  const wasInternal = row.address.trim() === UNUSED;
   row[field] = target.value;
+  if (field === "address" && wasInternal !== (row.address.trim() === UNUSED)) {
+    row.access = row.address.trim() === UNUSED ? UNUSED : "RO";
+    const caret = target instanceof HTMLInputElement ? target.selectionStart : null;
+    renderTable();
+    const addressInput = $("register-body").querySelector<HTMLInputElement>(`tr[data-index="${index}"] [data-field="address"]`);
+    addressInput?.focus({preventScroll: true});
+    if (caret !== null) addressInput?.setSelectionRange(caret, caret);
+  }
   if (field === "type") {
     if (row.type !== "reserved" && (previousType === "string") !== (row.type === "string")) row.default = "";
-    if (row.type !== "reserved" && !isOneOf(ACCESS, row.access)) row.access = "RW";
+    if (row.type !== "reserved" && row.address.trim() !== UNUSED && !isOneOf(ACCESS, row.access)) row.access = "RW";
     renderTable();
     $("register-body").querySelector<HTMLSelectElement>(`tr[data-index="${index}"] [data-field="type"]`)?.focus({preventScroll: true});
   }
