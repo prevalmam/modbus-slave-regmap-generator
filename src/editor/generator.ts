@@ -1,7 +1,9 @@
 
 /* Generate C90-compatible slave code from the validated JSON definition. */
 type GeneratedFiles = Record<string, string>;
-type GeneratorEntry = Omit<RegisterDefinition, "valueDomain"> & {
+type GeneratorEntry = Omit<RegisterDefinition, "valueDomain" | "address"> & {
+  address: number;
+  internal: boolean;
   min: number | Unused;
   max: number | Unused;
   default: number | string;
@@ -64,7 +66,8 @@ function generatorEntries(project: ValidatedProject): GeneratorEntry[] {
     } else {
       values = {min: UNUSED, max: UNUSED, default: valueDomain.kind === "string" ? valueDomain.default : UNUSED};
     }
-    return {...fields, ...values, definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
+    return {...fields, ...values, address: row.address === UNUSED ? 0 : row.address, internal: row.address === UNUSED,
+      definition, bitsetDefinition, groupValidate: row.groupValidate.toLowerCase(), count, bytes, array,
       registerCount: bytes / 2,
       enumType: C_TYPES[row.type] + (array ? "_ARRAY" : "")};
   });
@@ -137,7 +140,7 @@ function generateRegisterMap(project: RegmapDocument, entries: readonly Generato
       throw Error("生成用の値と型が一致しません。" + name);
     }
     tableRows.push("    {", ...[entry.address, offset, size, defaults, minimum, maximum, ram,
-      entry.enumType, count, C_ACCESS[entry.access]].map(value => "        " + value + ","), "    },");
+      entry.enumType, count, entry.internal ? "ACCESS_INTERNAL" : C_ACCESS[entry.access]].map(value => "        " + value + ","), "    },");
   }
   return {
     "modbus_reg_map_slave.h": header,
@@ -421,6 +424,7 @@ function generateAccess(entries: readonly GeneratorEntry[]): GeneratedFiles {
 
 function generateNotifications(entries: readonly GeneratorEntry[]): GeneratedFiles {
   const notified = entries.filter(entry => entry.updateNotify).sort((a,b) => a.address - b.address);
+  const masterNotified = notified.filter(entry => !entry.internal);
   const header = [`#ifndef MODBUS_REG_UPDATE_NOTIFY_SLAVE_H
 #define MODBUS_REG_UPDATE_NOTIFY_SLAVE_H
 
@@ -444,9 +448,9 @@ void modbus_reg_update_notify_master_write(uint16_t start_addr,
   for (const entry of notified) {
     header.push("", `extern void modbus_user_${entry.name}_updated(`, "    modbus_reg_update_source_t source);");
   }
-  if (notified.length) {
+  if (masterNotified.length) {
     source.push("    const uint32_t end_addr = (uint32_t)start_addr + num_regs;", "");
-    for (const entry of notified) {
+    for (const entry of masterNotified) {
       source.push(`    if (((uint32_t)start_addr <= ${entry.address}UL) &&
         (end_addr >= ${entry.address + entry.registerCount}UL))
     {

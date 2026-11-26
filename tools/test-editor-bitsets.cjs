@@ -14,8 +14,8 @@ function draft() {
 }
 function generate(p=draft()) {const result=core.inspectProject(p);assert.equal(result.errors.length,0,JSON.stringify(result.errors));return {doc:result.validated.documentValue,files:core.generateModbusFiles(result.validated)};}
 
-test("schema 5 roundtrips bitsets and schema 4 preserves reset groups",()=>{
- const {doc}=generate();assert.equal(doc.schemaVersion,5);assert.deepEqual(plain(generate(core.decodeProject(plain(doc)).project).doc),plain(doc));
+test("schema 6 roundtrips bitsets and schema 4 preserves reset groups",()=>{
+ const {doc}=generate();assert.equal(doc.schemaVersion,6);assert.deepEqual(plain(generate(core.decodeProject(plain(doc)).project).doc),plain(doc));
  const old=generate(core.sampleProject()).doc;old.schemaVersion=4;delete old.bitsetDefs;
  const loaded=core.decodeProject(plain(old)).project;assert.deepEqual(plain(loaded.bitsetDefs),[]);assert.deepEqual(plain(loaded.resetGroupDefs),plain(old.resetGroupDefs));
 });

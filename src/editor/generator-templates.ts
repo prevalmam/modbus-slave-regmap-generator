@@ -38,7 +38,8 @@ typedef enum {
 typedef enum {
     ACCESS_READ,
     ACCESS_WRITE,
-    ACCESS_READWRITE
+    ACCESS_READWRITE,
+    ACCESS_INTERNAL
 } access_mode_t;
 
 typedef struct {
@@ -336,6 +337,10 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
     	uint16_t total_regs;
 
         entry = &g_reg_table_slave[i];
+        if (entry->access == ACCESS_INTERNAL)
+        {
+            continue;
+        }
         addr = entry->modbus_addr;
         elemsize = (uint16_t)(entry->size / entry->length);
         total_regs = (uint16_t)(((uint32_t)elemsize * entry->length) / 2U);
@@ -762,7 +767,8 @@ static const reg_table_entry_t *find_entry_at_address(
 
     for (i = 0U; i < g_reg_table_slave_size; ++i)
     {
-        if (g_reg_table_slave[i].modbus_addr == address)
+        if ((g_reg_table_slave[i].access != ACCESS_INTERNAL) &&
+            (g_reg_table_slave[i].modbus_addr == address))
         {
             *table_index = i;
             return &g_reg_table_slave[i];
@@ -992,7 +998,8 @@ static int handle_modbus_multi_write(uint16_t start_addr,
         entry = find_entry_at_address(expected, &table_index);
         if ((entry == (const reg_table_entry_t *)0) ||
             (entry->type == REG_TYPE_RESERVED) ||
-            (entry->access == ACCESS_READ))
+            (entry->access == ACCESS_READ) ||
+            (entry->access == ACCESS_INTERNAL))
         {
             return MODBUS_EXC_ILLEGAL_DATA_ADDRESS;
         }
