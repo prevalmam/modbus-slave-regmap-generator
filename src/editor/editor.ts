@@ -241,12 +241,15 @@ function renderResetMemberships(row: DraftRegister) {
 function openDetail(index: number) {
   const row = project.registers[index];
   if (!row) return;
+  const internal = row.address.trim() === UNUSED;
   detailIndex = index;
   $("detail-title").textContent = row.name.trim() || "レジスタの詳細";
   for (const control of $("detail-body").querySelectorAll<TextControl>("[data-detail]")) {
     const key = control.dataset.detail;
     if (!isOneOf(FLAGS, key) && !isOneOf(DETAIL_TEXT_FIELDS, key)) continue;
-    control.disabled = row.type === "reserved" && (isOneOf(FLAGS, key) || key === "groupValidate");
+    const communicationSetting = key === "busyReject" || key === "writeCheck" || key === "groupValidate";
+    control.disabled = (row.type === "reserved" && (isOneOf(FLAGS, key) || key === "groupValidate")) ||
+      (internal && communicationSetting);
     control.value = control.disabled ? UNUSED : String(row[key]);
   }
   openEnumDetail(row);
