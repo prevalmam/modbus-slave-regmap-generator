@@ -127,6 +127,10 @@ td.empty { padding: 28px 12px; text-align: center; color: var(--muted); }
 #validation-button[data-state="bad"] { color: var(--error); border-color: #e6bdb5; background: #fff6f4; }
 #validation-button[data-state="ok"] { color: var(--accent); background: var(--soft); border-color: #bbded5; }
 .notice { margin: 11px 1px 0; color: var(--muted); font-size: .9rem; }
+.editor-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin: 11px 1px 0; }
+.editor-footer .notice { flex: 0 1 auto; margin: 0; }
+#open-license { flex: none; margin-left: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 400; }
+#open-license:hover { text-decoration: underline; }
 #message { color: var(--accent); font-weight: 650; }
 #message.error { color: var(--error); }
 dialog { width: min(580px, calc(100% - 24px)); border: 1px solid #b9c9d7; border-radius: 13px; padding: 0; color: var(--ink); box-shadow: 0 14px 54px #0c243d44; }
@@ -154,6 +158,9 @@ textarea { resize: vertical; }
 #ai-guide { width: min(900px, calc(100% - 24px)); }
 #ai-guide .dialog-body { max-height: 65vh; overflow: auto; }
 #ai-guide pre { padding: 10px; background: var(--paper); border-radius: 5px; overflow: auto; }
+#license-dialog { width: min(800px, calc(100% - 24px)); }
+#license-dialog .dialog-body { max-height: 65vh; overflow: auto; }
+#license-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; }
 #issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
 #issue-list li { margin-bottom: 5px; }
 #length-body td:last-child { width: 75px; }
@@ -312,7 +319,6 @@ textarea { resize: vertical; }
       <p class="input-hint">NVM未使用は <code>-</code>。文字列は引用符で囲み、空文字列は <code>""</code> と入力します。</p>
     </div>
   </section>
-  <p class="notice">C/H出力ではレジスタ定義、アクセサ、書き込みガード、更新通知、パーサーを生成します。</p>
   </div>
 
   <section class="editor-panel" id="enum-panel" role="tabpanel" aria-labelledby="enum-tab" hidden>
@@ -390,6 +396,10 @@ textarea { resize: vertical; }
       </div>
     </section>
   </section>
+  <footer class="editor-footer">
+    <p class="notice">C/H出力ではレジスタ定義、アクセサ、書き込みガード、更新通知、パーサーを生成します。</p>
+      <button type="button" class="plain" id="open-license" aria-haspopup="dialog" aria-controls="license-dialog">ライセンス</button>
+  </footer>
 </main>
 
 <dialog id="detail-dialog" aria-labelledby="detail-title">
@@ -466,6 +476,35 @@ textarea { resize: vertical; }
   </div>
 </dialog>
 
+<dialog id="license-dialog" aria-labelledby="license-title">
+  <div class="dialog-title"><h2 id="license-title">ライセンス</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>このレジスタ定義ツールはMITライセンスで提供しています。HTML単体にも、以下の著作権表示とライセンス全文を同梱しています。</p>
+    <pre id="license-text" lang="en">MIT License
+
+Copyright (c) 2025 prevalmam
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+</pre>
+  </div>
+</dialog>
+
 <dialog id="ai-guide" aria-labelledby="ai-guide-title">
   <div class="dialog-title"><h2 id="ai-guide-title">AIとの編集ガイド</h2><button type="button" data-close>閉じる</button></div>
   <div class="dialog-body">
@@ -476,10 +515,10 @@ textarea { resize: vertical; }
       <li>定義は <code>script#html-project-data</code> 内のJSONです。保存データの <code>version: 2</code> と <code>project</code> を読み、既存の項目と同じ型で編集します。JSONエクスポート形式は <code>schemaVersion: 7</code> です。</li>
       <li>製品定義の編集では、対象の定義だけを変更し、HTML内のスクリプト・スタイル・このガイドを保持します。埋め込むJSONは <code>&lt;</code> を <code>\u003c</code> にエスケープします。</li>
       <li><code>enumForm</code> と <code>bitsetForm</code> は登録前の編集内容です。登録済みの定義は <code>project.enums</code> と <code>project.bitsetDefs</code> にあります。登録前の編集は登録または破棄の方針を確認します。</li>
-      <li>検査には対象HTML自身の <code>parseHtmlDraft</code>・<code>inspectProject</code>、C/H生成には <code>generateModbusFiles</code> を使います。下の共通コマンドでブラウザーを開かずに実行できます。</li>
+      <li>検査には対象HTML自身の <code>parseHtmlDraft</code>・<code>inspectProject</code>、C/H生成には <code>generateModbusFiles</code> を使います。補助コマンドを併せて渡された場合は、下の方法でブラウザーを開かずに実行できます。</li>
       <li>変更前後の定義とC/Hを比較し、既存の番地・型・初期値・NVM配置・グループ所属への影響を確認します。通信公開の要否、既存配置の変更、保存データの移行は製品の仕様として判断します。</li>
     </ol>
-    <h3>共通コマンド</h3>
+    <h3>補助コマンドが手元にある場合</h3>
     <pre><code>node tools/check-html.cjs product.html
 node tools/check-html.cjs product.html --compare before.html
 node tools/check-html.cjs product.html --out-dir generated</code></pre>
@@ -487,7 +526,14 @@ node tools/check-html.cjs product.html --out-dir generated</code></pre>
     <h3>検証の範囲と所要時間</h3>
     <p>定義の編集は対象HTMLの検査と変更前後の比較を基本にします。生成器の改修は型チェック・HTML生成と、変更した処理のテストを追加します。成功済みで入力と依存先が変わっていない確認結果を再利用します。</p>
     <p>検査・C/H生成は通常1秒前後、生成器の型チェック・HTML生成・Node.jsテストは通常数秒が目安です。コマンドは <code>elapsedMs</code> を返します。AIの読解・編集時間、製品側の表示物再生成・ビルド・実機確認は分けて報告します。表示の見え方は人が確認します。</p>
-    <p>詳細手順・人への確認事項・コマンドの入手先は、<a href="https://github.com/prevalmam/modbus-slave-regmap-generator#ai-collaboration" target="_blank" rel="noopener">READMEの「AIの方々へ」</a>にまとめています。</p>
+    <h3>人と確認する判断ポイント</h3>
+    <ul>
+      <li>通信へ公開するか、内部専用にするか、およびRAM／NVMの使い分け。</li>
+      <li>既存の番地・型・配列長・NVM配置を変える場合の、通信先や保存データへの影響。</li>
+      <li>初期値・列挙値・ビット番号の意味、書込み検証や更新通知の必要性。</li>
+      <li>仕様から一意に決まらない項目と、登録前の編集をどう扱うか。</li>
+    </ul>
+    <p>作業に必要な補助コマンドや生成器のソースは、ユーザーから渡されたファイルや作業フォルダー内のものを使います。検査方法と実行結果、警告への判断、定義・生成C/Hの変更範囲、ビルド・実機確認などの未確認事項を報告します。</p>
   </div>
 </dialog>
 
@@ -4517,6 +4563,7 @@ $("reset-group-body").addEventListener("click", event => {
     recordEdit();
 });
 $("open-ai-guide").addEventListener("click", () => $("ai-guide", HTMLDialogElement).showModal());
+$("open-license").addEventListener("click", () => $("license-dialog", HTMLDialogElement).showModal());
 document.querySelectorAll("[data-close]").forEach(button => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
 });

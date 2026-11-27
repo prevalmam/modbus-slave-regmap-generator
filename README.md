@@ -715,6 +715,16 @@ node tools/check-html.cjs product.html --compare before.html --out-dir generated
 検証セットの選択と定型的な編集は、これらの仕様と変更範囲に従ってAIが行います。製品側のビルド・実機確認、公開・push・マージは、ユーザーの依頼範囲と製品側の手順に従います。
 
 
-## 9. 開発クレジット
+## 9. ライセンス
 
-[OpenAI Codex](https://github.com/codex)が、JSON／HTMLエディターとC/H生成機能の実装、公開APIの設計、検証、ドキュメント作成を支援しています。
+このツールと付属ドキュメントは、[MITライセンス](LICENSE)で提供しています。
+
+Copyright (c) 2025 prevalmam
+
+利用・改造・再配布・販売が可能です。コピーやソフトウェアの主要な部分を配布するときは、著作権表示とMITライセンス全文を一緒に残してください。ソフトウェアは現状のまま提供され、保証はありません。正式な条件は[LICENSE](LICENSE)を参照してください。
+
+配布HTMLにも同じ全文を埋め込んでいます。「ライセンス」ボタンから、オフラインで確認できます。HTMLの上書き保存でも保持され、`npm run build`ではルートの`LICENSE`から埋め込みます。
+
+## 10. 開発クレジット
+
+OpenAI Codexが、JSON／HTMLエディターとC/H生成機能の実装、公開APIの設計、検証、ドキュメント作成を支援しています。

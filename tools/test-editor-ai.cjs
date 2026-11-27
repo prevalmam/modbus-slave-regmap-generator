@@ -141,7 +141,7 @@ test("definition diff preserves array indices and escapes JSON Pointer field nam
   ]);
 });
 
-test("the embedded guide opens and closes through the actual editor handlers", () => {
+test("the embedded guide and license open and close through the actual editor handlers", () => {
   assert(original.includes('id="open-ai-guide" aria-haspopup="dialog" aria-controls="ai-guide"'));
   assert(original.includes('id="ai-guide" aria-labelledby="ai-guide-title"'));
   assert(original.includes("tools/check-html.cjs product.html --compare before.html"));
@@ -150,13 +150,19 @@ test("the embedded guide opens and closes through the actual editor handlers", (
   const start = source.indexOf('$("open-ai-guide").addEventListener(');
   const end = source.indexOf("initializeHtmlSave();", start);
   assert(start >= 0 && end > start);
-  let open, close;
-  const dialog = {open: false, showModal() {this.open = true;}, close() {this.open = false;}};
-  const button = {addEventListener: (_event, callback) => {close = callback;}, closest: () => dialog};
+  const callbacks = {}, dialogs = {};
+  for (const id of ["ai-guide", "license-dialog"]) {
+    dialogs[id] = {open: false, showModal() {this.open = true;}, close() {this.open = false;}};
+  }
+  const closeCallbacks = {};
   const context = vm.createContext({HTMLDialogElement: class {},
-    $: id => id === "ai-guide" ? dialog : {addEventListener: (_event, callback) => {open = callback;}},
-    document: {querySelectorAll: () => [button]}});
+    $: id => dialogs[id] ?? {addEventListener: (_event, callback) => {callbacks[id] = callback;}},
+    document: {querySelectorAll: () => Object.entries(dialogs).map(([id, dialog]) => ({
+      addEventListener: (_event, callback) => {closeCallbacks[id] = callback;}, closest: () => dialog
+    }))}});
   vm.runInContext(source.slice(start, end), context);
-  open(); assert.equal(dialog.open, true);
-  close(); assert.equal(dialog.open, false);
+  for (const [button, id] of [["open-ai-guide", "ai-guide"], ["open-license", "license-dialog"]]) {
+    callbacks[button](); assert.equal(dialogs[id].open, true);
+    closeCallbacks[id](); assert.equal(dialogs[id].open, false);
+  }
 });
