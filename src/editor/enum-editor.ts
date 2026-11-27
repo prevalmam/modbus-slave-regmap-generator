@@ -1,5 +1,5 @@
-type EditorTab = "register" | "enum" | "bitset";
-const editorTabs: readonly EditorTab[] = ["register", "enum", "bitset"];
+type EditorTab = "register" | "enum" | "bitset" | "length" | "reset-group";
+const editorTabs: readonly EditorTab[] = ["register", "enum", "bitset", "length", "reset-group"];
 
 function showEditorTab(active: EditorTab) {
   for (const name of editorTabs) {
@@ -18,9 +18,9 @@ for (const name of editorTabs) {
     let next: EditorTab;
     switch (event.key) {
       case "Home": next = "register"; break;
-      case "End": next = "bitset"; break;
+      case "End": next = editorTabs[editorTabs.length - 1]; break;
       case "ArrowLeft":
-      case "ArrowRight": next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? 2 : 1)) % editorTabs.length]; break;
+      case "ArrowRight": next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? editorTabs.length - 1 : 1)) % editorTabs.length]; break;
       default: return;
     }
     event.preventDefault();
@@ -117,7 +117,12 @@ $("enum-add-member").addEventListener("click", () => {
 });
 enumMembers.addEventListener("click", ({target}) => {
   if (target instanceof HTMLButtonElement && target.hasAttribute("data-remove-member")) {
-    target.closest("tr")?.remove();
+    const row = target.closest("tr");
+    if (!row) return;
+    const name = row.querySelector<HTMLInputElement>('[data-member="label"]')?.value.trim() ||
+      row.querySelector<HTMLInputElement>('[data-member="id"]')?.value || "";
+    if (!confirmDelete("選択肢", name)) return;
+    row.remove();
     refreshHtmlSaveState();
     $("enum-add-member").focus();
   }

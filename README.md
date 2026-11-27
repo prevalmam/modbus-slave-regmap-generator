@@ -134,7 +134,7 @@ BUSYは受付時点の状態、`writeCheck`は現在値と候補値を含めた�
 
 1. [modbus-regmap-editor.html](modbus-regmap-editor.html)をChromeまたはEdgeで開きます。
 2. 保存済みの製品用HTMLは、そのまま編集を再開できます。初回は「JSONをインポート」で既存の製品定義を取り込むか、サンプルを編集して定義を作成します。
-3. 基本設定でスレーブアドレスとNVMサイズを確認し、必要なら配列長定義・部分初期化グループを編集します。
+3. 基本設定でNVMサイズを確認します。配列長定義と部分初期化グループは、それぞれのタブで編集します。
 4. 「レジスタ」タブで番地、変数名、型、配列長、アクセス属性、値域、Default、NVMオフセットを編集します。
 5. 各行の「詳細」で書込み検証・更新通知・BUSY・グループ検証・部分初期化の所属と説明を設定します。enumやビット定義は専用タブで定義し、レジスタへ割り当てます。
 6. 「HTMLに上書き保存」またはCtrl+Sで、製品用HTMLへ編集内容を保存します。初回は保存先を選択し、以降はそのHTMLを開いて使います。
@@ -163,7 +163,7 @@ BUSYは受付時点の状態、`writeCheck`は現在値と候補値を含めた�
 
 生成CのRAM・初期値・値域・NVM情報は、既存の共通管理表に保持します。内部専用項目は`ACCESS_INTERNAL`で区別し、通信の読出し・単発／一括書込み・通信由来の更新通知から除外します。管理表のアドレス欄には実装上の未使用値0が入りますが、通信対象の判定を先に行うため、実在するアドレス0とも共存します。データ構造のフィールド追加やNVM配置の自動変更は行いません。
 
-JSONの`address`は数値または`"-"`です。新規エクスポートはschema 6を使用し、既存schema 5の定義も読み込めます。新版HTMLへ移行するときは、旧HTMLからJSONをエクスポートし、新HTMLでインポートしてHTML保存します。
+JSONの`address`は数値または`"-"`です。エクスポートとインポートにはschema 7を使用します。HTML内の編集データはversion 2で保存します。
 
 ### 4.3 入力チェックと再生成
 
@@ -205,7 +205,7 @@ uint8_t modbus_user_accept_slave_address(uint8_t address)
 
 `frame`はCRCを含めて組立て済みです。送信をキューやDMAへ委ねる場合は、この関数から戻るまでに利用側の送信用領域へコピーするか、送信を完了させます。生成側のバッファの寿命は呼出し中として扱います。送信受付、キュー容量、RS-485方向制御、送信完了の管理は利用側が担当します。
 
-宛先の受付は要求ごとに問い合わせます。固定値にも、レジスタの設定値にも、複数の受付番地にも対応できます。基本設定のアドレスから`MODBUS_SLAVE_ADDR`も生成しますが、parserの採否はこの関数の戻り値で決まります。
+宛先の受付は要求ごとに問い合わせます。固定値にも、レジスタの設定値にも、複数の受付番地にも対応でき、parserの採否はこの関数の戻り値で決まります。
 
 #### BUSY・単項目検証を接続する
 
@@ -386,11 +386,10 @@ void product_save_poll(void)
 
 ### 6.1 JSONの構成とレジスタ表
 
-定義JSONは`format: "modbus-slave-regmap"`、`schemaVersion: 6`です。トップレベルに`config`、`lengthDefs`、`enums`、`bitsetDefs`、`resetGroupDefs`、`registers`を保存します。
+定義JSONは`format: "modbus-slave-regmap"`、`schemaVersion: 7`です。トップレベルに`config`、`lengthDefs`、`enums`、`bitsetDefs`、`resetGroupDefs`、`registers`を保存します。
 
 | 要素 | 役割 |
 |---|---|
-| `config.slaveAddress` | 1〜247。生成する`MODBUS_SLAVE_ADDR`の値。実際の宛先受付は手書き関数で判断 |
 | `config.nvmSize` | 1〜65535バイト。生成する`NVM_TOTAL_SIZE`の値 |
 | `lengthDefs` | `{name, length}`で配列長の名前と値を定義 |
 | `enums` | 複数のレジスタから参照できるenum定義 |
@@ -421,8 +420,8 @@ void product_save_poll(void)
 ```json
 {
   "format": "modbus-slave-regmap",
-  "schemaVersion": 6,
-  "config": {"slaveAddress": 1, "nvmSize": 256},
+  "schemaVersion": 7,
+  "config": {"nvmSize": 256},
   "lengthDefs": [],
   "enums": [],
   "bitsetDefs": [],
@@ -610,7 +609,7 @@ modbus_write_result_t modbus_user_group_validate_alarms(
 |---|---|
 | `modbus_reg_map_slave.c/.h` | 現在値とDefault・値域・保存配置、公開の配列長／NVM定数 |
 | `modbus_reg_map_slave_internal.h` | 生成実装用のレジスタ表とRAM参照 |
-| `modbus_reg_idx_slave.h` | 項目indexと配列要素index、`MODBUS_SLAVE_ADDR` |
+| `modbus_reg_idx_slave.h` | 項目indexと配列要素index |
 | `modbus_reg_access_slave.c/.h` | 型付きgetter／setter、値域・Default取得、文字列コピー、ビット操作 |
 | `modbus_reg_update_notify_slave.c/.h` | 更新通知の宣言と振分け |
 | `modbus_reg_write_guard_slave.c/.h` | BUSY問い合わせ、単項目・グループ検証の宣言と専用型 |

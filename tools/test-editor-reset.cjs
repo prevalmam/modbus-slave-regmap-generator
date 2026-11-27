@@ -14,28 +14,16 @@ test("current schema roundtrip retains definitions and multiple memberships", ()
  p.resetGroupDefs.push({id: "factory", label: "Factory"});
  p.registers[0].resetGroups = ["settings", "factory"];
  const {doc} = generate(p);
- assert.equal(doc.schemaVersion, 6);
+ assert.equal(doc.schemaVersion, 7);
  const {doc: again} = generate(core.decodeProject(plain(doc)).project);
  assert.deepEqual(plain(again), plain(doc));
 });
-for (const version of [1, 2, 3]) test("legacy JSON " + version + " has no reset groups", () => {
+for (const version of [1, 2, 3, 4, 5, 6]) test("old JSON schema " + version + " is rejected", () => {
  const {doc} = generate(draft());
  doc.schemaVersion = version;
- delete doc.resetGroupDefs;
- for (const row of doc.registers) delete row.resetGroups;
- if (version < 3) {
-  // Earlier formats used min/max/default instead of valueDomain.
-  for (const row of doc.registers) {
-   if (row.valueDomain?.kind === "range") Object.assign(row, row.valueDomain);
-   else Object.assign(row, {min: "-", max: "-", default: row.valueDomain?.default ?? "-"});
-   delete row.valueDomain;
-  }
-  delete doc.enums;
- }
- const p = core.decodeProject(plain(doc)).project;
- assert.deepEqual(plain(p.resetGroupDefs), []);
- assert.ok(p.registers.every(row => row.resetGroups.length === 0));
+ assert.throws(() => core.decodeProject(plain(doc)));
 });
+
 test("invalid group definitions, references and reserved membership reject export", () => {
  const mutations = [p => p.resetGroupDefs.push({...p.resetGroupDefs[0]}),
  p => p.resetGroupDefs[0].id = "count", p => p.resetGroupDefs[0].id = "Bad-ID",

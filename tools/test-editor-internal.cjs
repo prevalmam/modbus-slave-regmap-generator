@@ -148,9 +148,9 @@ function runtime(p = fixture()) {
   return {context, table, notifications, read16, bytes};
 }
 
-test("addressless RAM and saved fields roundtrip with schema 6 and retain named APIs", () => {
+test("addressless RAM and saved fields roundtrip with schema 7 and retain named APIs", () => {
   const {files, doc} = generate();
-  assert.equal(doc.schemaVersion, 6);
+  assert.equal(doc.schemaVersion, 7);
   assert.equal(doc.registers[0].address, "-");
   assert.equal(doc.registers[0].access, "-");
   assert.deepEqual(generate(core.decodeProject(doc).project).doc, doc);
@@ -273,17 +273,16 @@ test("the actual address input handler updates R/W and preserves input focus", (
   assert.equal(renders, 2); assert.equal(edits, 2);
 });
 
-test("schema 5 public definitions remain importable and HTML saved drafts retain addressless fields", () => {
-  const legacy = generate(core.sampleProject()).doc; legacy.schemaVersion = 5;
-  assert.equal(generate(core.decodeProject(legacy).project).doc.schemaVersion, 6);
+test("current HTML saved drafts retain addressless fields and reject old drafts", () => {
   const html = fs.readFileSync(path.join(__dirname, "../modbus-regmap-editor.html"), "utf8");
   const source = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/gi)].find(m => !m[1].includes("application/json"))[2];
   const parse = source.slice(source.indexOf("function parseHtmlDraft("), source.indexOf("function currentHtmlDraft("));
   const c = vm.createContext({isObject: vm.runInContext("isObject", core), isList: Array.isArray, decodeEnum: core.decodeEnum,
     decodeBitset: core.decodeBitset, TEXT_FIELDS: plain(vm.runInContext("TEXT_FIELDS", core)), FLAGS: ["updateNotify", "busyReject", "writeCheck"]});
   vm.runInContext(parse, c);
-  const draft = {version: 1, sourceName: "local.json", project: plain(fixture()), enumForm: null, bitsetForm: null};
+  const draft = {version: 2, sourceName: "local.json", project: plain(fixture()), enumForm: null, bitsetForm: null};
   assert.deepEqual(plain(c.parseHtmlDraft(JSON.stringify(draft))), draft);
+  assert.throws(() => c.parseHtmlDraft(JSON.stringify({...draft, version: 1})));
 });
 
 module.exports = {fixture, generate, runtime};

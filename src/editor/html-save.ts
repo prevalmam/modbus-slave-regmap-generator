@@ -1,5 +1,5 @@
 type EditorHtmlDraft = {
-  version: 1;
+  version: 2;
   sourceName: string;
   project: DraftProject;
   enumForm: EnumFormDraft | null;
@@ -31,10 +31,10 @@ function parseHtmlDraft(text: string): EditorHtmlDraft | null {
   const invalid = "HTML内の編集データを読み込めませんでした。";
   const textFields = (input: unknown, fields: readonly string[]): input is Record<string, unknown> =>
     isObject(input) && fields.every(field => typeof input[field] === "string");
-  if (!isObject(value) || value.version !== 1 || typeof value.sourceName !== "string" ||
+  if (!isObject(value) || value.version !== 2 || typeof value.sourceName !== "string" ||
       !isObject(value.project)) throw Error(invalid);
   const {config, enums, lengthDefs, registers} = value.project;
-  if (!textFields(config, ["slaveAddress", "nvmSize"]) ||
+  if (!textFields(config, ["nvmSize"]) || Object.keys(config).length !== 1 ||
       !isList(lengthDefs) || !lengthDefs.every(row => textFields(row, ["name", "length"])) ||
       !isList(enums) || !isList(registers)) throw Error(invalid);
   const groups = value.project.resetGroupDefs ?? [];
@@ -76,7 +76,7 @@ function parseHtmlDraft(text: string): EditorHtmlDraft | null {
 }
 
 function currentHtmlDraft(): string {
-  const draft: EditorHtmlDraft = {version: 1, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm()};
+  const draft: EditorHtmlDraft = {version: 2, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm()};
   return JSON.stringify(draft);
 }
 

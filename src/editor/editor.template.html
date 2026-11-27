@@ -79,10 +79,9 @@ main.wrap {
 .intro h1 { font-size: clamp(1.8rem, 3vw, 2.55rem); line-height: 1.2; letter-spacing: -.045em; margin: 5px 0 7px; }
 .intro p { margin: 0; color: var(--muted); }
 .eyebrow { display: flex; gap: 8px; align-items: center; color: var(--accent); font-size: .78rem; font-weight: 750; letter-spacing: .12em; }
-.eyebrow span { letter-spacing: .04em; border-radius: 4px; padding: 1px 6px; background: #dceae8; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.editor-tabs { display: flex; flex: none; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
-.editor-tabs button { border-radius: 7px 7px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
+.editor-tabs { display: flex; flex: none; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.editor-tabs button { flex: none; border-radius: 7px 7px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
 .editor-tabs button[aria-selected="true"] { background: white; border-color: var(--line); border-bottom-color: var(--accent); color: var(--accent); }
 .editor-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .config { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; background: white; border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px; margin-bottom: 16px; }
@@ -110,6 +109,9 @@ table { border-spacing: 0; width: 100%; text-align: left; }
 .registers { min-width: 850px; table-layout: fixed; }
 .enum-cell { padding-inline: 7px; overflow-wrap: anywhere; }
 .enum-cell .badge { padding-inline: 5px; }
+button.enum-detail-trigger { display: block; width: 100%; min-height: 31px; padding: .24rem 0; border: 0; background: transparent; text-align: left; font-weight: inherit; white-space: normal; }
+button.enum-detail-trigger:hover { background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.bitset-cell .enum-detail-trigger { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bitset-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
 td { padding: 5px 5px; border-bottom: 1px solid #eaf0f5; }
@@ -151,8 +153,8 @@ textarea { resize: vertical; }
 #issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
 #issue-list li { margin-bottom: 5px; }
 #length-body td:last-child { width: 75px; }
-#length-dialog table { margin-bottom: 8px; }
-.enum-workspace { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); min-height: 0; gap: 12px; }
+.enum-workspace { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); min-height: 0; gap: 12px; }
+#bitset-panel .enum-workspace { grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); }
 .enum-workspace .card { overflow: auto; overscroll-behavior: contain; }
 .enum-types, .enum-form { padding: 14px 16px; }
 .enum-types h3, .enum-form h3 { margin: 0 0 8px; font-size: 1rem; }
@@ -165,13 +167,14 @@ textarea { resize: vertical; }
 .enum-form .field-grid { max-width: 720px; margin-bottom: 14px; }
 .enum-form .table-wrap { flex: none; max-height: min(38vh, 400px); }
 .enum-members { min-width: 340px; }
+.bitset-members { table-layout: fixed; min-width: 540px; }
 .enum-members td:last-child { width: 66px; }
 .enum-form .actions { margin-top: 10px; }
 .enum-form .enum-notes { color: var(--muted); margin: 4px 0 8px; font-size: .86rem; }
 #enum-status { color: var(--accent); }
 #enum-status.error { color: var(--error); }
 #bitset-status.error { color: var(--error); }
-#bitset-list { list-style: none; padding: 0; }
+#bitset-list { list-style: none; padding: 0; width: max-content; min-width: 100%; }
 #bitset-list button { width: 100%; text-align: left; white-space: normal; }
 #bitset-list code { display: block; }
 #bitset-list button[aria-pressed="true"] { background: var(--soft); }
@@ -251,7 +254,7 @@ textarea { resize: vertical; }
 <main class="wrap">
   <section class="intro" aria-labelledby="title">
     <div>
-      <div class="eyebrow">REGMAP EDITOR <span>UI試作</span></div>
+      <div class="eyebrow">REGMAP EDITOR</div>
       <h1 id="title">レジスタマップ</h1>
       <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
@@ -266,14 +269,13 @@ textarea { resize: vertical; }
     <button type="button" role="tab" id="register-tab" aria-controls="register-panel" aria-selected="true">レジスタ</button>
     <button type="button" role="tab" id="enum-tab" aria-controls="enum-panel" aria-selected="false" tabindex="-1">列挙型</button>
     <button type="button" role="tab" id="bitset-tab" aria-controls="bitset-panel" aria-selected="false" tabindex="-1">ビット定義</button>
+    <button type="button" role="tab" id="length-tab" aria-controls="length-panel" aria-selected="false" tabindex="-1">配列長定義</button>
+    <button type="button" role="tab" id="reset-group-tab" aria-controls="reset-group-panel" aria-selected="false" tabindex="-1">部分初期化グループ</button>
   </div>
 
   <div class="editor-panel" id="register-panel" role="tabpanel" aria-labelledby="register-tab">
   <section class="config" aria-label="基本設定">
-    <label>スレーブアドレス <input id="slave-address" inputmode="numeric" class="mono"></label>
     <label>NVMサイズ <input id="nvm-size" inputmode="numeric" class="mono"> B</label>
-    <button type="button" id="open-lengths">配列長定義 <span id="length-count"></span></button>
-    <button type="button" id="open-reset-groups">部分初期化グループ</button>
     <div class="origin"><span>編集中</span><span id="source" class="badge"></span><button type="button" class="plain small" id="reset-sample">サンプルを開く</button></div>
   </section>
 
@@ -348,10 +350,40 @@ textarea { resize: vertical; }
         <h3>ビット定義</h3>
         <div class="field-grid"><label>定義ID <input id="bitset-id" required pattern="[a-z][a-z0-9_]*"></label><label>表示名 <input id="bitset-label" required></label>
           <label>幅 <select id="bitset-width"><option value="16">16 bit</option><option value="32">32 bit</option></select></label></div>
-        <div class="table-wrap"><table class="enum-members"><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
+        <div class="table-wrap"><table class="enum-members bitset-members"><colgroup><col style="width:72px"><col><col><col style="width:128px"><col style="width:66px"></colgroup><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
         <div class="actions"><button type="button" class="small" id="bitset-add-bit">＋ ビットを追加</button><button type="submit" class="primary small">登録</button><span id="bitset-status" role="status"></span></div>
       </form>
     </div>
+  </section>
+  <section class="editor-panel" id="length-panel" role="tabpanel" aria-labelledby="length-tab" hidden>
+    <div class="enum-intro">
+      <h2 id="length-title">配列長定義</h2>
+      <p>名前を定義すると、レジスタ表の「配列長」欄に数値の代わりにその名前を入力できます。</p>
+    </div>
+    <section class="card" aria-labelledby="length-list-title">
+      <div class="toolbar">
+        <h2 id="length-list-title">配列長定義一覧 <span id="length-count"></span></h2>
+        <button type="button" id="add-length">＋ 定義を追加</button>
+      </div>
+      <div class="table-wrap" role="region" aria-labelledby="length-list-title" tabindex="0">
+        <table><thead><tr><th scope="col">定義名</th><th scope="col">長さ</th><th scope="col">操作</th></tr></thead><tbody id="length-body"></tbody></table>
+      </div>
+    </section>
+  </section>
+  <section class="editor-panel" id="reset-group-panel" role="tabpanel" aria-labelledby="reset-group-tab" hidden>
+    <div class="enum-intro">
+      <h2 id="reset-group-title">部分初期化グループ</h2>
+      <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
+    </div>
+    <section class="card" aria-labelledby="reset-group-list-title">
+      <div class="toolbar">
+        <h2 id="reset-group-list-title">部分初期化グループ一覧</h2>
+        <button type="button" id="add-reset-group">＋ グループを追加</button>
+      </div>
+      <div class="table-wrap" role="region" aria-labelledby="reset-group-list-title" tabindex="0">
+        <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
+      </div>
+    </section>
   </section>
 </main>
 
@@ -409,24 +441,6 @@ textarea { resize: vertical; }
   <div class="dialog-foot actions">
     <button type="button" class="danger" id="delete-row">この行を削除</button>
     <button type="button" class="primary" data-close>表に戻る</button>
-  </div>
-</dialog>
-
-<dialog id="reset-group-dialog" aria-labelledby="reset-group-title">
-  <div class="dialog-title"><h2 id="reset-group-title">部分初期化グループ</h2><button type="button" data-close>閉じる</button></div>
-  <div class="dialog-body">
-    <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
-    <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
-    <button type="button" id="add-reset-group">＋ グループを追加</button>
-  </div>
-</dialog>
-
-<dialog id="length-dialog" aria-labelledby="length-dialog-title">
-  <div class="dialog-title"><h2 id="length-dialog-title">配列長定義</h2><button type="button" data-close>閉じる</button></div>
-  <div class="dialog-body">
-    <p>名前を定義すると、レジスタ表の「配列長」欄に数値の代わりにその名前を入力できます。</p>
-    <table><thead><tr><th scope="col">定義名</th><th scope="col">長さ</th><th scope="col">操作</th></tr></thead><tbody id="length-body"></tbody></table>
-    <button type="button" id="add-length">＋ 定義を追加</button>
   </div>
 </dialog>
 
