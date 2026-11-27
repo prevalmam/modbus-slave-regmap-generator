@@ -727,4 +727,4 @@ Copyright (c) 2025 prevalmam
 
 ## 10. 開発クレジット
 
-[OpenAI Codex](https://github.com/codex)が、JSON／HTMLエディターとC/H生成機能の実装、公開APIの設計、検証、ドキュメント作成を支援しています。
+OpenAI Codexが、JSON／HTMLエディターとC/H生成機能の実装、公開APIの設計、検証、ドキュメント作成を支援しています。
