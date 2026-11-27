@@ -66,14 +66,14 @@ function preflight(f, d) {
   const end = body.indexOf("    snapshot_initialize(&snapshot);");
   assert.ok(start >= 0 && end > start);
   let code = body.slice(start, end)
-    .replace("entry = find_entry_at_address(expected, &table_index);", "[entry, table_index] = find_entry_at_address(expected);")
+    .replace("entry = find_entry_at_address(expected, &table_index, &cursor);", "[entry, table_index, cursor] = find_entry_at_address(expected, cursor);")
     .replace(/\(const reg_table_entry_t \*\)0/g, "null").replace(/->/g, ".")
     .replace(/\(uint(?:16|32)_t\)/g, "").replace(/(\d+)(?:UL|U)\b/g, "$1");
   const run = new Function("modbus_write_guard_entry_is_busy", "find_entry_at_address", "num_regs",
-    "const start_addr = 0, end_addr = num_regs, end_addr32 = num_regs; let expected, entry, table_index, entry_regs;" +
+    "const start_addr = 0, end_addr = num_regs, end_addr32 = num_regs; let expected, entry, table_index, entry_regs, cursor = 0, first_index = 0;" +
     "const REG_TYPE_RESERVED = 99, ACCESS_READ = 0, ACCESS_INTERNAL = 3, MB_FALSE = 0, MODBUS_EXC_ILLEGAL_DATA_ADDRESS = 2, MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY = 6;" +
     "const entry_register_count = entry => entry.count;" + code + "return 'preflight-passed';");
-  return count => run(d.check, address => [{type: 0, access: 1, count: 1}, address], count);
+  return count => run(d.check, address => [{type: 0, access: 1, count: 1}, address, address + 1], count);
 }
 
 test("all requested entries are preflighted before validation and RAM application with exception 06 on busy", () => {

@@ -34,7 +34,7 @@ function body(source, name) {
   return source.slice(match.index + match[0].length, end - 1);
 }
 function expressions(c) {
-  return c.replace(/\((?:const )?(?:void|reg_table_entry_t|uint8_t)\s*\*\)0/g, "null")
+  return c.replace(/\((?:const )?(?:void|reg_table_entry_t|uint8_t|uint16_t)\s*\*\)0/g, "null")
     .replace(/&g_reg_table_slave\[/g, "g_reg_table_slave[")
     .replace(/->/g, ".").replace(/\((?:uint(?:8|16|32)_t|int)\)/g, "")
     .replace(/\(void\)/g, "").replace(/\b(0x[\da-f]+|\d+)(?:UL|U)\b/gi, "$1");
@@ -51,10 +51,12 @@ function runtime(p = fixture()) {
   const entries = core.generatorEntries(validated);
   const bytes = n => Uint8Array.of(n & 255, n >> 8);
   const read16 = data => data[0] | data[1] << 8;
-  const table = entries.map(entry => ({name: entry.name, modbus_addr: entry.address,
+  const lookupStats = {visits: 0};
+  const table = entries.map(entry => new Proxy({name: entry.name, modbus_addr: entry.address,
     access: entry.internal ? 3 : {RO: 0, WO: 1, RW: 2}[entry.access], type: 0, size: entry.bytes, length: entry.count,
     nvm_offset: entry.nvmOffset === "-" ? 256 : entry.nvmOffset,
-    min_value: bytes(entry.min), max_value: bytes(entry.max), default_value: bytes(entry.default), ram_ptr: bytes(entry.default)}));
+    min_value: bytes(entry.min), max_value: bytes(entry.max), default_value: bytes(entry.default), ram_ptr: bytes(entry.default)},
+    {get(target, key) { if (key === "modbus_addr") lookupStats.visits++; return target[key]; }}));
   const notifications = [], scratch = [];
   let scratchIndex = 0;
   const context = vm.createContext({
@@ -94,14 +96,16 @@ function runtime(p = fixture()) {
     }
   }
   let find = body(parser, "find_entry_at_address").replace("*table_index = i;", "")
-    .replace("return &g_reg_table_slave[i];", "return [g_reg_table_slave[i], i];")
-    .replace("return (const reg_table_entry_t *)0;", "return [null, 0];");
-  vm.runInContext("function find_entry_at_address(address) {" + declarations(expressions(find)) + "}", context);
+    .replace("i = *cursor;", "i = cursor;")
+    .replace("*cursor = (uint16_t)(i + 1U);", "")
+    .replace("return &g_reg_table_slave[i];", "return [g_reg_table_slave[i], i, i + 1];")
+    .replace("return (const reg_table_entry_t *)0;", "return [null, 0, cursor];");
+  vm.runInContext("function find_entry_at_address(address, cursor = 0) {" + declarations(expressions(find)) + "}", context);
   vm.runInContext("function entry_register_count(entry) {" + expressions(body(parser, "entry_register_count")) + "}", context);
   const reads = readRuntime(parser, table);
   context.select_read = (start, quantity) => reads.select(start, quantity);
   let write = body(parser, "handle_modbus_multi_write")
-    .replaceAll("entry = find_entry_at_address(expected, &table_index);", "[entry, table_index] = find_entry_at_address(expected);")
+    .replaceAll("entry = find_entry_at_address(expected, &table_index, &cursor);", "[entry, table_index, cursor] = find_entry_at_address(expected, cursor);")
     .replaceAll("scratch_reset(&front, &back)", "scratch_reset()")
     .replaceAll("scratch_allocate(entry, &front, &back)", "scratch_allocate(entry)")
     .replace("entry_data = &data[(uint16_t)(expected - start_addr) * 2U];", "entry_data = data.subarray((expected-start_addr)*2);")
@@ -141,7 +145,7 @@ function runtime(p = fixture()) {
         declarations(expressions(body(access, name))) + "}", context);
     }
   }
-  return {context, table, notifications, read16, bytes};
+  return {context, table, notifications, read16, bytes, lookupStats};
 }
 
 test("addressless RAM and saved fields roundtrip with schema 7 and retain named APIs", () => {
@@ -279,6 +283,60 @@ test("current HTML saved drafts retain addressless fields and reject old drafts"
   const draft = {version: 2, sourceName: "local.json", project: plain(fixture()), enumForm: null, bitsetForm: null};
   assert.deepEqual(plain(c.parseHtmlDraft(JSON.stringify(draft))), draft);
   assert.throws(() => c.parseHtmlDraft(JSON.stringify({...draft, version: 1})));
+});
+
+test("multi-write cursor wraps a descending table and restarts all passes and requests", () => {
+  const p = fixture();
+  p.registers = [2, 1, 0].map(address => core.draftRow({address, name: "word_" + address,
+    access: "RW", min: 0, max: 100, default: address, nvmOffset: address * 2}));
+  p.registers.splice(1, 0, core.draftRow({address: "-", name: "private_word", access: "-",
+    min: 0, max: 100, default: 77, nvmOffset: "-"}));
+  const r = runtime(p), c = r.context;
+  for (const [start, values] of [[0, [10, 11, 12]], [1, [21, 22]], [0, [30, 31, 32]]]) {
+    assert.equal(c.handle_modbus_multi_write(start, values.length, Uint8Array.from(values.flatMap(v => [0, v]))), 0);
+    for (let i = 0; i < values.length; i++) {
+      assert.equal(r.read16(r.table.find(entry => entry.name === "word_" + (start + i)).ram_ptr), values[i]);
+    }
+    assert.equal(r.read16(r.table.find(entry => entry.name === "private_word").ram_ptr), 77);
+  }
+});
+
+test("multi-write contiguous lookup work stays bounded across all three passes", () => {
+  const p = fixture();
+  p.registers = [...Array.from({length: 80}, (_, address) => core.draftRow({address,
+    name: "prefix_" + address, access: "RO", nvmOffset: "-"})),
+    ...Array.from({length: 123}, (_, i) => core.draftRow({address: 100 + i,
+      name: "word_" + i, access: "RW", min: 0, max: 1000, default: 0, nvmOffset: "-"}))];
+  const r = runtime(p);
+  assert.equal(r.context.handle_modbus_multi_write(100, 123,
+    Uint8Array.from(Array.from({length: 123}, (_, i) => [0, i]).flat())), 0);
+  assert.ok(r.lookupStats.visits <= 3 * r.table.length, "Each field must not restart a full table search");
+  for (let i = 0; i < 123; i++) assert.equal(r.read16(r.table[80 + i].ram_ptr), i);
+  r.lookupStats.visits = 0;
+  assert.equal(r.context.handle_modbus_multi_write(222, 1, Uint8Array.of(0, 99)), 0);
+  assert.equal(r.read16(r.table.at(-1).ram_ptr), 99);
+  assert.ok(r.lookupStats.visits <= r.table.length + 2, "Later passes must reuse the first validated index");
+});
+
+test("multi-write still completes BUSY preflight before checks and rejects without changes", () => {
+  const p = fixture();
+  p.registers = [2, 1, 0].map(address => core.draftRow({address, name: "word_" + address,
+    access: "RW", min: 0, max: 100, default: address, nvmOffset: address * 2}));
+  const r = runtime(p), events = [];
+  r.context.modbus_write_guard_entry_is_busy = index => {events.push("busy:" + r.table[index].name); return 0;};
+  r.context.run_user_write_check = (index, entry) => {events.push("check:" + entry.name); return 0;};
+  assert.equal(r.context.handle_modbus_multi_write(0, 3, Uint8Array.of(0, 10, 0, 11, 0, 12)), 0);
+  assert.deepEqual(events, ["busy:word_0", "busy:word_1", "busy:word_2", "check:word_0", "check:word_1", "check:word_2"]);
+  const before = r.table.map(entry => Array.from(entry.ram_ptr));
+  events.length = 0;
+  r.context.run_user_write_check = (index, entry) => {events.push(entry.name); return entry.name === "word_2" ? 3 : 0;};
+  assert.equal(r.context.handle_modbus_multi_write(0, 3, Uint8Array.of(0, 20, 0, 21, 0, 22)), 3);
+  assert.deepEqual(r.table.map(entry => Array.from(entry.ram_ptr)), before);
+  r.context.modbus_write_guard_entry_is_busy = index => r.table[index].name === "word_2" ? 1 : 0;
+  events.length = 0;
+  assert.equal(r.context.handle_modbus_multi_write(0, 3, Uint8Array.of(0, 20, 0, 21, 0, 22)), 6);
+  assert.deepEqual(events, []);
+  assert.deepEqual(r.table.map(entry => Array.from(entry.ram_ptr)), before);
 });
 
 module.exports = {fixture, generate, runtime};
