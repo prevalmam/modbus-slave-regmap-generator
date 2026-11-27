@@ -153,6 +153,9 @@ textarea { resize: vertical; }
 #ai-guide { width: min(900px, calc(100% - 24px)); }
 #ai-guide .dialog-body { max-height: 65vh; overflow: auto; }
 #ai-guide pre { padding: 10px; background: var(--paper); border-radius: 5px; overflow: auto; }
+#license-dialog { width: min(800px, calc(100% - 24px)); }
+#license-dialog .dialog-body { max-height: 65vh; overflow: auto; }
+#license-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .88rem; }
 #issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
 #issue-list li { margin-bottom: 5px; }
 #length-body td:last-child { width: 75px; }
@@ -262,6 +265,7 @@ textarea { resize: vertical; }
       <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
     <div class="actions" id="register-actions">
+      <button type="button" class="plain small" id="open-license" aria-haspopup="dialog" aria-controls="license-dialog">ライセンス</button>
       <button type="button" class="small" id="open-ai-guide" aria-haspopup="dialog" aria-controls="ai-guide">AIとの編集ガイド</button>
       <button type="button" id="save-json" title="外部ツールでの利用や、新版HTMLへの移行用">JSONをエクスポート</button>
       <button type="button" class="primary" id="open-code">C/H 一括生成</button>
@@ -462,6 +466,14 @@ textarea { resize: vertical; }
   </div>
   <div class="dialog-foot actions">
     <button type="button" class="primary" id="save-zip">C/H一式をZIPで保存</button>
+  </div>
+</dialog>
+
+<dialog id="license-dialog" aria-labelledby="license-title">
+  <div class="dialog-title"><h2 id="license-title">ライセンス</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>このレジスタ定義ツールはMITライセンスで提供しています。HTML単体にも、以下の著作権表示とライセンス全文を同梱しています。</p>
+    <pre id="license-text" lang="en"><!-- @license-text --></pre>
   </div>
 </dialog>
 
