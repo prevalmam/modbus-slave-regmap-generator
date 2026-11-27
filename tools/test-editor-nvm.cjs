@@ -25,7 +25,7 @@ function row(type, count, offset = 0, name = "value", address = 1) {
 }
 
 function project(registers, lengthDefs = []) {
-  return {config: {slaveAddress: "1", nvmSize: "256"}, lengthDefs, enums: [], registers};
+  return {config: {nvmSize: "256"}, lengthDefs, enums: [], registers};
 }
 
 function maximum(draft, expected) {

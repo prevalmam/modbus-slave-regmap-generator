@@ -59,7 +59,7 @@ function editBitset(index: number | null, draft?: BitsetFormDraft) {
     bitsetRows.replaceChildren(); draft.bits.forEach(appendBitsetBit);
   }
   $("bitset-status").textContent = "";
-  $("bitset-list").innerHTML = project.bitsetDefs.map((item, i) => `<li><button type="button" data-bitset-index="${i}" aria-pressed="${i === editedBitset}">${escapeHtml(item.label)} <code>${escapeHtml(item.id)} (${item.width} bit)</code></button></li>`).join("") || "<li>登録済みのビット定義はありません。</li>";
+  $("bitset-list").innerHTML = project.bitsetDefs.map((item, i) => `<li><button type="button" data-bitset-index="${i}" aria-pressed="${i === editedBitset}">${escapeHtml(item.label)} <code>${escapeHtml(item.id)}</code><code>${item.width} bit</code></button></li>`).join("") || "<li>登録済みのビット定義はありません。</li>";
   renderBitMasks();
 }
 
@@ -73,7 +73,13 @@ $("bitset-add").addEventListener("click", () => {editBitset(null); refreshHtmlSa
 $("bitset-add-bit").addEventListener("click", () => {appendBitsetBit(); refreshHtmlSaveState();});
 bitsetRows.addEventListener("click", ({target}) => {
   if (target instanceof HTMLButtonElement && target.hasAttribute("data-remove-bit")) {
-    target.closest("tr")?.remove(); refreshHtmlSaveState();
+    const row = target.closest("tr");
+    if (!row) return;
+    const name = row.querySelector<HTMLInputElement>('[data-bit="label"]')?.value.trim() ||
+      row.querySelector<HTMLInputElement>('[data-bit="id"]')?.value ||
+      row.querySelector<HTMLInputElement>('[data-bit="bit"]')?.value || "";
+    if (!confirmDelete("ビット", name)) return;
+    row.remove(); refreshHtmlSaveState();
   }
 });
 $("bitset-form").addEventListener("input", () => {renderBitMasks(); refreshHtmlSaveState();});

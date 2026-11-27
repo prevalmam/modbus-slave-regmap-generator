@@ -80,10 +80,9 @@ main.wrap {
 .intro h1 { font-size: clamp(1.8rem, 3vw, 2.55rem); line-height: 1.2; letter-spacing: -.045em; margin: 5px 0 7px; }
 .intro p { margin: 0; color: var(--muted); }
 .eyebrow { display: flex; gap: 8px; align-items: center; color: var(--accent); font-size: .78rem; font-weight: 750; letter-spacing: .12em; }
-.eyebrow span { letter-spacing: .04em; border-radius: 4px; padding: 1px 6px; background: #dceae8; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.editor-tabs { display: flex; flex: none; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
-.editor-tabs button { border-radius: 7px 7px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
+.editor-tabs { display: flex; flex: none; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.editor-tabs button { flex: none; border-radius: 7px 7px 0 0; border-color: transparent; background: transparent; color: var(--muted); }
 .editor-tabs button[aria-selected="true"] { background: white; border-color: var(--line); border-bottom-color: var(--accent); color: var(--accent); }
 .editor-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .config { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; background: white; border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px; margin-bottom: 16px; }
@@ -111,6 +110,9 @@ table { border-spacing: 0; width: 100%; text-align: left; }
 .registers { min-width: 850px; table-layout: fixed; }
 .enum-cell { padding-inline: 7px; overflow-wrap: anywhere; }
 .enum-cell .badge { padding-inline: 5px; }
+button.enum-detail-trigger { display: block; width: 100%; min-height: 31px; padding: .24rem 0; border: 0; background: transparent; text-align: left; font-weight: inherit; white-space: normal; }
+button.enum-detail-trigger:hover { background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.bitset-cell .enum-detail-trigger { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bitset-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 th { position: sticky; top: 0; z-index: 1; background: #eaf0f5; color: #354e63; font-weight: 750; font-size: .84rem; padding: 8px 7px; }
 td { padding: 5px 5px; border-bottom: 1px solid #eaf0f5; }
@@ -152,8 +154,8 @@ textarea { resize: vertical; }
 #issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
 #issue-list li { margin-bottom: 5px; }
 #length-body td:last-child { width: 75px; }
-#length-dialog table { margin-bottom: 8px; }
-.enum-workspace { display: grid; grid-template-columns: minmax(190px, 240px) minmax(0, 1fr); min-height: 0; gap: 12px; }
+.enum-workspace { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); min-height: 0; gap: 12px; }
+#bitset-panel .enum-workspace { grid-template-columns: minmax(240px, 360px) minmax(0, 1fr); }
 .enum-workspace .card { overflow: auto; overscroll-behavior: contain; }
 .enum-types, .enum-form { padding: 14px 16px; }
 .enum-types h3, .enum-form h3 { margin: 0 0 8px; font-size: 1rem; }
@@ -166,13 +168,14 @@ textarea { resize: vertical; }
 .enum-form .field-grid { max-width: 720px; margin-bottom: 14px; }
 .enum-form .table-wrap { flex: none; max-height: min(38vh, 400px); }
 .enum-members { min-width: 340px; }
+.bitset-members { table-layout: fixed; min-width: 540px; }
 .enum-members td:last-child { width: 66px; }
 .enum-form .actions { margin-top: 10px; }
 .enum-form .enum-notes { color: var(--muted); margin: 4px 0 8px; font-size: .86rem; }
 #enum-status { color: var(--accent); }
 #enum-status.error { color: var(--error); }
 #bitset-status.error { color: var(--error); }
-#bitset-list { list-style: none; padding: 0; }
+#bitset-list { list-style: none; padding: 0; width: max-content; min-width: 100%; }
 #bitset-list button { width: 100%; text-align: left; white-space: normal; }
 #bitset-list code { display: block; }
 #bitset-list button[aria-pressed="true"] { background: var(--soft); }
@@ -252,7 +255,7 @@ textarea { resize: vertical; }
 <main class="wrap">
   <section class="intro" aria-labelledby="title">
     <div>
-      <div class="eyebrow">REGMAP EDITOR <span>UI試作</span></div>
+      <div class="eyebrow">REGMAP EDITOR</div>
       <h1 id="title">レジスタマップ</h1>
       <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
@@ -267,14 +270,13 @@ textarea { resize: vertical; }
     <button type="button" role="tab" id="register-tab" aria-controls="register-panel" aria-selected="true">レジスタ</button>
     <button type="button" role="tab" id="enum-tab" aria-controls="enum-panel" aria-selected="false" tabindex="-1">列挙型</button>
     <button type="button" role="tab" id="bitset-tab" aria-controls="bitset-panel" aria-selected="false" tabindex="-1">ビット定義</button>
+    <button type="button" role="tab" id="length-tab" aria-controls="length-panel" aria-selected="false" tabindex="-1">配列長定義</button>
+    <button type="button" role="tab" id="reset-group-tab" aria-controls="reset-group-panel" aria-selected="false" tabindex="-1">部分初期化グループ</button>
   </div>
 
   <div class="editor-panel" id="register-panel" role="tabpanel" aria-labelledby="register-tab">
   <section class="config" aria-label="基本設定">
-    <label>スレーブアドレス <input id="slave-address" inputmode="numeric" class="mono"></label>
     <label>NVMサイズ <input id="nvm-size" inputmode="numeric" class="mono"> B</label>
-    <button type="button" id="open-lengths">配列長定義 <span id="length-count"></span></button>
-    <button type="button" id="open-reset-groups">部分初期化グループ</button>
     <div class="origin"><span>編集中</span><span id="source" class="badge"></span><button type="button" class="plain small" id="reset-sample">サンプルを開く</button></div>
   </section>
 
@@ -349,10 +351,40 @@ textarea { resize: vertical; }
         <h3>ビット定義</h3>
         <div class="field-grid"><label>定義ID <input id="bitset-id" required pattern="[a-z][a-z0-9_]*"></label><label>表示名 <input id="bitset-label" required></label>
           <label>幅 <select id="bitset-width"><option value="16">16 bit</option><option value="32">32 bit</option></select></label></div>
-        <div class="table-wrap"><table class="enum-members"><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
+        <div class="table-wrap"><table class="enum-members bitset-members"><colgroup><col style="width:72px"><col><col><col style="width:128px"><col style="width:66px"></colgroup><thead><tr><th>番号</th><th>識別名</th><th>表示名</th><th>自動mask</th><th>操作</th></tr></thead><tbody id="bitset-bits"></tbody></table></div>
         <div class="actions"><button type="button" class="small" id="bitset-add-bit">＋ ビットを追加</button><button type="submit" class="primary small">登録</button><span id="bitset-status" role="status"></span></div>
       </form>
     </div>
+  </section>
+  <section class="editor-panel" id="length-panel" role="tabpanel" aria-labelledby="length-tab" hidden>
+    <div class="enum-intro">
+      <h2 id="length-title">配列長定義</h2>
+      <p>名前を定義すると、レジスタ表の「配列長」欄に数値の代わりにその名前を入力できます。</p>
+    </div>
+    <section class="card" aria-labelledby="length-list-title">
+      <div class="toolbar">
+        <h2 id="length-list-title">配列長定義一覧 <span id="length-count"></span></h2>
+        <button type="button" id="add-length">＋ 定義を追加</button>
+      </div>
+      <div class="table-wrap" role="region" aria-labelledby="length-list-title" tabindex="0">
+        <table><thead><tr><th scope="col">定義名</th><th scope="col">長さ</th><th scope="col">操作</th></tr></thead><tbody id="length-body"></tbody></table>
+      </div>
+    </section>
+  </section>
+  <section class="editor-panel" id="reset-group-panel" role="tabpanel" aria-labelledby="reset-group-tab" hidden>
+    <div class="enum-intro">
+      <h2 id="reset-group-title">部分初期化グループ</h2>
+      <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
+    </div>
+    <section class="card" aria-labelledby="reset-group-list-title">
+      <div class="toolbar">
+        <h2 id="reset-group-list-title">部分初期化グループ一覧</h2>
+        <button type="button" id="add-reset-group">＋ グループを追加</button>
+      </div>
+      <div class="table-wrap" role="region" aria-labelledby="reset-group-list-title" tabindex="0">
+        <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
+      </div>
+    </section>
   </section>
 </main>
 
@@ -413,24 +445,6 @@ textarea { resize: vertical; }
   </div>
 </dialog>
 
-<dialog id="reset-group-dialog" aria-labelledby="reset-group-title">
-  <div class="dialog-title"><h2 id="reset-group-title">部分初期化グループ</h2><button type="button" data-close>閉じる</button></div>
-  <div class="dialog-body">
-    <p>グループを定義し、各レジスタの詳細で初期化対象を選びます。複数グループに所属できます。</p>
-    <table><thead><tr><th scope="col">グループID</th><th scope="col">表示名</th><th scope="col">操作</th></tr></thead><tbody id="reset-group-body"></tbody></table>
-    <button type="button" id="add-reset-group">＋ グループを追加</button>
-  </div>
-</dialog>
-
-<dialog id="length-dialog" aria-labelledby="length-dialog-title">
-  <div class="dialog-title"><h2 id="length-dialog-title">配列長定義</h2><button type="button" data-close>閉じる</button></div>
-  <div class="dialog-body">
-    <p>名前を定義すると、レジスタ表の「配列長」欄に数値の代わりにその名前を入力できます。</p>
-    <table><thead><tr><th scope="col">定義名</th><th scope="col">長さ</th><th scope="col">操作</th></tr></thead><tbody id="length-body"></tbody></table>
-    <button type="button" id="add-length">＋ 定義を追加</button>
-  </div>
-</dialog>
-
 <dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
   <div class="dialog-title"><h2 id="issue-dialog-title">入力の検証</h2><button type="button" data-close>閉じる</button></div>
   <div class="dialog-body"><ul id="issue-list"></ul></div>
@@ -474,11 +488,11 @@ textarea { resize: vertical; }
   </div>
 </dialog>
 
-<script id="html-project-data" type="application/json">{"version":1,"sourceName":"サンプル","project":{"config":{"slaveAddress":"1","nvmSize":"256"},"lengthDefs":[{"name":"NAME_LEN","length":"12"}],"enums":[{"id":"modbus_parity","label":"Modbusパリティ","members":[{"id":"none","value":0,"label":"なし"},{"id":"odd","value":1,"label":"奇数"},{"id":"even","value":2,"label":"偶数"}]},{"id":"modbus_operation_status","label":"運転状態","members":[{"id":"init","value":0,"label":"初期化"},{"id":"meas","value":1,"label":"測定"},{"id":"stby","value":2,"label":"待機"},{"id":"wash","value":3,"label":"洗浄"},{"id":"cal","value":4,"label":"校正"},{"id":"manual_cal","value":5,"label":"手動校正"}]}],"registers":[{"address":"0","name":"Measurement","type":"float","length":"1","access":"RO","min":"-100","max":"100","default":"1","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"測定値の表示例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"32","name":"DeviceName","type":"string","length":"NAME_LEN","access":"RO","min":"-","max":"-","default":"\"MODBUS DEMO\"","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"56","name":"OperationStatus","type":"uint16_t","length":"1","access":"RW","min":"0","max":"5","default":"0","nvmOffset":"-","updateNotify":true,"busyReject":false,"writeCheck":true,"groupValidate":"-","unit":"-","summary":"運転状態の書き込み判定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_operation_status","defaultMemberId":"init"}},{"address":"106","name":"ModbusBaudrate","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"1","nvmOffset":"0x000C","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"通信速度の設定例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"107","name":"ModbusParityBit","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"0","nvmOffset":"0x000E","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"パリティの設定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_parity","defaultMemberId":"none"}},{"address":"108","name":"reserved_108","type":"reserved","length":"2","access":"-","min":"-","max":"-","default":"-","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null}]},"enumForm":null}</script>
+<script id="html-project-data" type="application/json">{"version":2,"sourceName":"サンプル","project":{"config":{"nvmSize":"256"},"lengthDefs":[{"name":"NAME_LEN","length":"12"}],"enums":[{"id":"modbus_parity","label":"Modbusパリティ","members":[{"id":"none","value":0,"label":"なし"},{"id":"odd","value":1,"label":"奇数"},{"id":"even","value":2,"label":"偶数"}]},{"id":"modbus_operation_status","label":"運転状態","members":[{"id":"init","value":0,"label":"初期化"},{"id":"meas","value":1,"label":"測定"},{"id":"stby","value":2,"label":"待機"},{"id":"wash","value":3,"label":"洗浄"},{"id":"cal","value":4,"label":"校正"},{"id":"manual_cal","value":5,"label":"手動校正"}]}],"registers":[{"address":"0","name":"Measurement","type":"float","length":"1","access":"RO","min":"-100","max":"100","default":"1","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"測定値の表示例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"32","name":"DeviceName","type":"string","length":"NAME_LEN","access":"RO","min":"-","max":"-","default":"\"MODBUS DEMO\"","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"56","name":"OperationStatus","type":"uint16_t","length":"1","access":"RW","min":"0","max":"5","default":"0","nvmOffset":"-","updateNotify":true,"busyReject":false,"writeCheck":true,"groupValidate":"-","unit":"-","summary":"運転状態の書き込み判定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_operation_status","defaultMemberId":"init"}},{"address":"106","name":"ModbusBaudrate","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"1","nvmOffset":"0x000C","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"通信速度の設定例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"107","name":"ModbusParityBit","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"0","nvmOffset":"0x000E","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"パリティの設定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_parity","defaultMemberId":"none"}},{"address":"108","name":"reserved_108","type":"reserved","length":"2","access":"-","min":"-","max":"-","default":"-","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null}]},"enumForm":null}</script>
 <script>
 "use strict";
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"];
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"];
@@ -561,7 +575,7 @@ function draftRow(data = {}) {
 }
 function sampleProject() {
     return {
-        config: { slaveAddress: "1", nvmSize: "256" },
+        config: { nvmSize: "256" },
         bitsetDefs: [],
         resetGroupDefs: [{ id: "settings", label: "設定の初期化" }],
         lengthDefs: [{ name: "NAME_LEN", length: "12" }],
@@ -709,39 +723,31 @@ function decodeProject(input) {
     const { source, rows } = documentValue;
     if (isObject(source) && source.sheet === "RegisterTable" && isList(rows)) {
         return {
-            project: { config: { slaveAddress: "", nvmSize: "" }, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
+            project: { config: { nvmSize: "" }, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
                 registers: rows.map(importTableRow) },
-            hint: "レジスタ表を読み込みました。スレーブアドレスとNVMサイズを入力してください。"
+            hint: "レジスタ表を読み込みました。NVMサイズを入力してください。"
         };
     }
     const { format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs } = documentValue;
-    const legacy = schemaVersion === 1;
-    const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
-    const hasResetGroups = schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
-    const hasBitsets = schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
     const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
-    const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
-            (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
-    if (format !== FORMAT || (!legacy && schemaVersion !== 2 && !hasDomains) || !isObject(config) ||
+    const fields = [...TABLE_FIELDS.filter(field => (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
+    if (format !== FORMAT || schemaVersion !== SCHEMA_VERSION || !isObject(config) ||
         !isList(lengthDefs) || !isList(registers) ||
-        !["slaveAddress", "nvmSize"].every(key => Object.hasOwn(config, key) && isScalar(config[key]))) {
+        Object.keys(config).length !== 1 || !Object.hasOwn(config, "nvmSize") || !isScalar(config.nvmSize)) {
         throw Error(invalid);
     }
-    if (hasDomains && !isList(enums))
+    if (!isList(enums) || !isList(bitsetDefs))
         throw Error(invalid);
-    if (hasBitsets && !isList(bitsetDefs))
-        throw Error(invalid);
-    if (hasResetGroups && (!isList(resetGroupDefs) ||
-        !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
+    if (!isList(resetGroupDefs) ||
+        !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string")) {
         throw Error(invalid);
     }
-    const definitions = hasDomains && isList(enums) ? enums.map(value => decodeEnum(value, invalid)) : [];
+    const definitions = enums.map(value => decodeEnum(value, invalid));
     const project = {
-        config: { slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize) },
+        config: { nvmSize: scalarText(config.nvmSize) },
         enums: definitions,
-        bitsetDefs: hasBitsets && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
-        resetGroupDefs: hasResetGroups ?
-            resetGroupDefs.map(group => ({ ...group })) : [],
+        bitsetDefs: bitsetDefs.map(value => decodeBitset(value, invalid)),
+        resetGroupDefs: resetGroupDefs.map(group => ({ ...group })),
         lengthDefs: lengthDefs.map(row => {
             if (!isObject(row) || typeof row.name !== "string" || !isScalar(row.length))
                 throw Error(invalid);
@@ -750,51 +756,42 @@ function decodeProject(input) {
         registers: registers.map(row => {
             if (!isObject(row) || !fields.every(key => Object.hasOwn(row, key)))
                 throw Error(invalid);
-            if (hasResetGroups && (!isList(row.resetGroups) ||
-                !row.resetGroups.every(id => typeof id === "string")))
+            if (!isList(row.resetGroups) || !row.resetGroups.every(id => typeof id === "string"))
                 throw Error(invalid);
-            if (hasDomains) {
-                const domain = row.valueDomain;
-                if (!isObject(domain))
-                    throw Error(invalid);
-                if (hasBitsets && domain.kind === "bitset" &&
-                    typeof domain.bitsetId === "string" && typeof domain.default === "number") {
-                    return { ...draftRow({ ...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default }),
-                        bitsetDomain: { kind: "bitset", bitsetId: domain.bitsetId, default: domain.default } };
-                }
-                if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
-                    const definition = definitions.find(item => item.id === domain.enumId);
-                    const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
-                    return { ...draftRow({ ...row, ...range }), enumDomain: { kind: "enum", enumId: domain.enumId,
-                            defaultMemberId: domain.defaultMemberId } };
-                }
-                if (row.type === "string" && domain.kind === "string" && typeof domain.default === "string") {
-                    return draftRow({ ...row, default: domain.default });
-                }
-                if (row.type === "reserved" && domain.kind === "reserved")
-                    return draftRow(row);
-                if (isOneOf(NUMERIC_TYPES, row.type) && domain.kind === "range" && typeof domain.min === "number" &&
-                    typeof domain.max === "number" && typeof domain.default === "number") {
-                    return draftRow({ ...row, min: domain.min, max: domain.max, default: domain.default });
-                }
+            const domain = row.valueDomain;
+            if (!isObject(domain))
                 throw Error(invalid);
+            if (domain.kind === "bitset" && typeof domain.bitsetId === "string" && typeof domain.default === "number") {
+                return { ...draftRow({ ...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default }),
+                    bitsetDomain: { kind: "bitset", bitsetId: domain.bitsetId, default: domain.default } };
             }
-            if (!legacy)
+            if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
+                const definition = definitions.find(item => item.id === domain.enumId);
+                const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
+                return { ...draftRow({ ...row, ...range }), enumDomain: { kind: "enum", enumId: domain.enumId,
+                        defaultMemberId: domain.defaultMemberId } };
+            }
+            if (row.type === "string" && domain.kind === "string" && typeof domain.default === "string") {
+                return draftRow({ ...row, default: domain.default });
+            }
+            if (row.type === "reserved" && domain.kind === "reserved")
                 return draftRow(row);
-            const notes = Object.fromEntries(NOTES.map(key => [key, scalarText(row[key]).trim() ? row[key] : UNUSED]));
-            return draftRow({ ...row, groupValidate: row.groupValidate ?? null, ...notes });
+            if (isOneOf(NUMERIC_TYPES, row.type) && domain.kind === "range" && typeof domain.min === "number" &&
+                typeof domain.max === "number" && typeof domain.default === "number") {
+                return draftRow({ ...row, min: domain.min, max: domain.max, default: domain.default });
+            }
+            throw Error(invalid);
         })
     };
-    return { project, hint: legacy ? "旧版のJSONを読み込みました。NVM・グループ検証の未指定欄を確認してください。" : "JSONを読み込みました。" };
+    return { project, hint: "JSONを読み込みました。" };
 }
 function inspectProject(project) {
     const errors = [];
     const warnings = [];
     const issue = (text, row = null, field = "") => errors.push({ text, row, field });
-    const slaveAddress = unsigned(project.config.slaveAddress);
     const nvmSize = unsigned(project.config.nvmSize);
-    if (slaveAddress === null || slaveAddress < 1 || slaveAddress > 247) {
-        issue("スレーブアドレスは1〜247の整数を入力してください。", null, "slaveAddress");
+    if (Object.keys(project.config).length !== 1) {
+        issue("基本設定はNVMサイズを指定してください。", null, "nvmSize");
     }
     if (nvmSize === null || nvmSize < 1 || nvmSize > 65535) {
         issue("NVMサイズは1〜65535 Bの整数を入力してください。", null, "nvmSize");
@@ -838,7 +835,7 @@ function inspectProject(project) {
         "reg_type_t", "access_mode_t", "reg_table_entry_t", "modbus_write_result_t", "modbus_reg_snapshot_t",
         "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
         "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
-        "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+        "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
         "NVM_MAX_ENTRY_SIZE_BYTES", "ACCESS_INTERNAL",
         ...lengths.keys(), ...project.registers.map(row => row.name.trim())
     ]);
@@ -1095,11 +1092,11 @@ function inspectProject(project) {
     }
     checkOverlap(addressRanges, "address", "アドレス範囲");
     checkOverlap(nvmRanges, "nvmOffset", "NVM範囲");
-    if (errors.length || slaveAddress === null || nvmSize === null) {
+    if (errors.length || nvmSize === null) {
         return { errors, warnings, counts, validated: null };
     }
     const documentValue = {
-        format: FORMAT, schemaVersion: SCHEMA_VERSION, config: { slaveAddress, nvmSize },
+        format: FORMAT, schemaVersion: SCHEMA_VERSION, config: { nvmSize },
         lengthDefs, enums: project.enums, bitsetDefs: project.bitsetDefs ?? [], resetGroupDefs, registers
     };
     return { errors, warnings, counts, validated: { documentValue, counts: registerCounts } };
@@ -2403,7 +2400,7 @@ function stringInitializer(text, length) {
     const bytes = Array.from(text, character => "0x" + hex(character.charCodeAt(0), 2));
     return "{" + bytes.concat(Array(length - bytes.length).fill("0x00")).join(", ") + "}";
 }
-function generateRegisterIndex(entries, slaveAddress) {
+function generateRegisterIndex(entries) {
     const definitions = [];
     entries.forEach((entry, index) => {
         const macro = indexMacro(entry);
@@ -2414,7 +2411,7 @@ function generateRegisterIndex(entries, slaveAddress) {
         }
     });
     return ["#ifndef MODBUS_REG_IDX_SLAVE_H", "#define MODBUS_REG_IDX_SLAVE_H", "",
-        "#define MODBUS_SLAVE_ADDR " + slaveAddress, "", "/* Modbus register index definitions */",
+        "/* Modbus register index definitions */",
         ...definitions, "", "#endif", ""].join("\n");
 }
 function generateRegisterMap(project, entries) {
@@ -3034,7 +3031,7 @@ function generateModbusFiles(validated) {
         ...generateEnums(enums, entries),
         ...generateBitsetTypes(validated.documentValue.bitsetDefs),
         ...generateRegisterMap(validated.documentValue, entries),
-        "modbus_reg_idx_slave.h": generateRegisterIndex(entries, validated.documentValue.config.slaveAddress),
+        "modbus_reg_idx_slave.h": generateRegisterIndex(entries),
         ...generateAccess(entries),
         ...generateNotifications(entries),
         ...generateWriteGuards(entries, groups),
@@ -3364,7 +3361,7 @@ ${withEnums ? "    uint16_t raw;\n" : ""}    uint8_t repaired = 0U;
 `;
     return { "modbus_reg_nvm_slave.h": header, "modbus_reg_nvm_slave.c": source };
 }
-const editorTabs = ["register", "enum", "bitset"];
+const editorTabs = ["register", "enum", "bitset", "length", "reset-group"];
 function showEditorTab(active) {
     for (const name of editorTabs) {
         const tab = $(name + "-tab");
@@ -3384,11 +3381,11 @@ for (const name of editorTabs) {
                 next = "register";
                 break;
             case "End":
-                next = "bitset";
+                next = editorTabs[editorTabs.length - 1];
                 break;
             case "ArrowLeft":
             case "ArrowRight":
-                next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? 2 : 1)) % editorTabs.length];
+                next = editorTabs[(editorTabs.indexOf(name) + (event.key === "ArrowLeft" ? editorTabs.length - 1 : 1)) % editorTabs.length];
                 break;
             default: return;
         }
@@ -3476,7 +3473,14 @@ $("enum-add-member").addEventListener("click", () => {
 });
 enumMembers.addEventListener("click", ({ target }) => {
     if (target instanceof HTMLButtonElement && target.hasAttribute("data-remove-member")) {
-        target.closest("tr")?.remove();
+        const row = target.closest("tr");
+        if (!row)
+            return;
+        const name = row.querySelector('[data-member="label"]')?.value.trim() ||
+            row.querySelector('[data-member="id"]')?.value || "";
+        if (!confirmDelete("選択肢", name))
+            return;
+        row.remove();
         refreshHtmlSaveState();
         $("enum-add-member").focus();
     }
@@ -3620,7 +3624,7 @@ function editBitset(index, draft) {
         draft.bits.forEach(appendBitsetBit);
     }
     $("bitset-status").textContent = "";
-    $("bitset-list").innerHTML = project.bitsetDefs.map((item, i) => `<li><button type="button" data-bitset-index="${i}" aria-pressed="${i === editedBitset}">${escapeHtml(item.label)} <code>${escapeHtml(item.id)} (${item.width} bit)</code></button></li>`).join("") || "<li>登録済みのビット定義はありません。</li>";
+    $("bitset-list").innerHTML = project.bitsetDefs.map((item, i) => `<li><button type="button" data-bitset-index="${i}" aria-pressed="${i === editedBitset}">${escapeHtml(item.label)} <code>${escapeHtml(item.id)}</code><code>${item.width} bit</code></button></li>`).join("") || "<li>登録済みのビット定義はありません。</li>";
     renderBitMasks();
 }
 $("bitset-list").addEventListener("click", ({ target }) => {
@@ -3636,7 +3640,15 @@ $("bitset-add").addEventListener("click", () => { editBitset(null); refreshHtmlS
 $("bitset-add-bit").addEventListener("click", () => { appendBitsetBit(); refreshHtmlSaveState(); });
 bitsetRows.addEventListener("click", ({ target }) => {
     if (target instanceof HTMLButtonElement && target.hasAttribute("data-remove-bit")) {
-        target.closest("tr")?.remove();
+        const row = target.closest("tr");
+        if (!row)
+            return;
+        const name = row.querySelector('[data-bit="label"]')?.value.trim() ||
+            row.querySelector('[data-bit="id"]')?.value ||
+            row.querySelector('[data-bit="bit"]')?.value || "";
+        if (!confirmDelete("ビット", name))
+            return;
+        row.remove();
         refreshHtmlSaveState();
     }
 });
@@ -3725,11 +3737,11 @@ function parseHtmlDraft(text) {
         return null;
     const invalid = "HTML内の編集データを読み込めませんでした。";
     const textFields = (input, fields) => isObject(input) && fields.every(field => typeof input[field] === "string");
-    if (!isObject(value) || value.version !== 1 || typeof value.sourceName !== "string" ||
+    if (!isObject(value) || value.version !== 2 || typeof value.sourceName !== "string" ||
         !isObject(value.project))
         throw Error(invalid);
     const { config, enums, lengthDefs, registers } = value.project;
-    if (!textFields(config, ["slaveAddress", "nvmSize"]) ||
+    if (!textFields(config, ["nvmSize"]) || Object.keys(config).length !== 1 ||
         !isList(lengthDefs) || !lengthDefs.every(row => textFields(row, ["name", "length"])) ||
         !isList(enums) || !isList(registers))
         throw Error(invalid);
@@ -3777,7 +3789,7 @@ function parseHtmlDraft(text) {
     return value;
 }
 function currentHtmlDraft() {
-    const draft = { version: 1, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm() };
+    const draft = { version: 2, sourceName, project, enumForm: pendingEnumForm(), bitsetForm: pendingBitsetForm() };
     return JSON.stringify(draft);
 }
 function confirmLeavingHtml(event) {
@@ -4008,6 +4020,10 @@ function rowIndex(element) {
     const index = element.closest("tr")?.dataset.index;
     return index === undefined ? null : unsigned(index);
 }
+function confirmDelete(kind, name) {
+    const label = name.trim();
+    return window.confirm(label ? `${kind}「${label}」を削除しますか？` : `${kind}を削除しますか？`);
+}
 function download(filename, data, contentType) {
     const url = URL.createObjectURL(new Blob([data], { type: contentType }));
     const link = document.createElement("a");
@@ -4070,14 +4086,11 @@ const fileInput = $("file", HTMLInputElement);
 const searchInput = $("search", HTMLInputElement);
 const typeFilter = $("type-filter", HTMLSelectElement);
 const configInputs = {
-    slaveAddress: $("slave-address", HTMLInputElement),
     nvmSize: $("nvm-size", HTMLInputElement)
 };
 const detailDialog = $("detail-dialog", HTMLDialogElement);
 const codeDialog = $("code-dialog", HTMLDialogElement);
 const codeSelection = $("code-selection", HTMLSelectElement);
-const lengthDialog = $("length-dialog", HTMLDialogElement);
-const resetGroupDialog = $("reset-group-dialog", HTMLDialogElement);
 const issueDialog = $("issue-dialog", HTMLDialogElement);
 let project = sampleProject();
 let sourceName = "サンプル";
@@ -4103,7 +4116,7 @@ function updateValidation() {
         warnings.length ? "検証済み · 注意 " + warnings.length + " 件" : "入力チェック OK";
     document.querySelectorAll('[aria-invalid="true"]').forEach(element => element.removeAttribute("aria-invalid"));
     for (const issue of errors) {
-        if (issue.field === "slaveAddress" || issue.field === "nvmSize") {
+        if (issue.field === "nvmSize") {
             configInputs[issue.field].setAttribute("aria-invalid", "true");
         }
         if (issue.row !== null) {
@@ -4133,9 +4146,10 @@ function registerMarkup(row, index) {
     const selection = row.enumDomain;
     const definition = selection && project.enums.find(item => item.id === selection.enumId);
     const member = definition && definition.members.find(item => item.id === selection?.defaultMemberId);
-    const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell"><span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}</td><td class="enum-cell bitset-cell">${Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力"}</td>` : selection ? `<td colspan="2" class="enum-cell">
-    <span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}
-    </td><td class="enum-cell">${member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択"}</td>` :
+    const detailValue = (content) => `<button type="button" class="enum-detail-trigger" data-field="detail" aria-label="${escapeHtml(row.name.trim() || String(index + 1))} の詳細を開く" title="詳細を開く">${content}</button>`;
+    const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell">${detailValue(`<span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}`)}</td><td class="enum-cell bitset-cell">${detailValue(Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力")}</td>` : selection ? `<td colspan="2" class="enum-cell">
+    ${detailValue(`<span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}`)}
+    </td><td class="enum-cell">${detailValue(member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択")}</td>` :
         input("min", reserved || string) + input("max", reserved || string) + input("default", reserved);
     return `<tr data-index="${index}">
     ${input("address")}${input("name")}${type}${input("length")}${access}${valueCells}${input("nvmOffset", reserved)}
@@ -4172,7 +4186,6 @@ function renderResetGroups() {
 function replaceProject(next, name, enumForm = null, bitsetForm = null) {
     project = next;
     sourceName = name;
-    configInputs.slaveAddress.value = project.config.slaveAddress;
     configInputs.nvmSize.value = project.config.nvmSize;
     searchInput.value = "";
     typeFilter.value = "";
@@ -4295,7 +4308,7 @@ $("save-zip").addEventListener("click", () => {
     message("C/HのZIPダウンロードを開始しました。");
 });
 $("validation-button").addEventListener("click", showIssues);
-for (const field of ["slaveAddress", "nvmSize"]) {
+for (const field of ["nvmSize"]) {
     const input = configInputs[field];
     input.addEventListener("input", () => {
         project.config[field] = input.value;
@@ -4350,9 +4363,12 @@ $("register-body").addEventListener("input", event => {
 });
 $("register-body").addEventListener("click", event => {
     const { target } = event;
-    if (!(target instanceof HTMLButtonElement) || target.dataset.field !== "detail")
+    if (!(target instanceof Element))
         return;
-    const index = rowIndex(target);
+    const button = target.closest('button[data-field="detail"]');
+    if (!button)
+        return;
+    const index = rowIndex(button);
     if (index !== null)
         openDetail(index);
 });
@@ -4382,12 +4398,14 @@ $("detail-body").addEventListener("input", event => {
 });
 detailDialog.addEventListener("close", renderTable);
 $("delete-row").addEventListener("click", () => {
+    const row = project.registers[detailIndex];
+    if (!row || !confirmDelete("レジスタ", row.name))
+        return;
     project.registers.splice(detailIndex, 1);
     detailDialog.close();
     recordEdit();
     renderTable();
 });
-$("open-lengths").addEventListener("click", () => lengthDialog.showModal());
 $("add-length").addEventListener("click", () => {
     project.lengthDefs.push({ name: "", length: "1" });
     renderLengths();
@@ -4415,11 +4433,13 @@ $("length-body").addEventListener("click", event => {
     const index = rowIndex(target);
     if (index === null)
         return;
+    const row = project.lengthDefs[index];
+    if (!row || !confirmDelete("配列長定義", row.name))
+        return;
     project.lengthDefs.splice(index, 1);
     renderLengths();
     recordEdit();
 });
-$("open-reset-groups").addEventListener("click", () => resetGroupDialog.showModal());
 $("add-reset-group").addEventListener("click", () => {
     project.resetGroupDefs.push({ id: "", label: "" });
     renderResetGroups();
@@ -4453,10 +4473,14 @@ $("reset-group-body").addEventListener("click", event => {
     if (index === null)
         return;
     const group = project.resetGroupDefs[index];
+    if (!group)
+        return;
     if (project.registers.some(row => row.resetGroups.includes(group.id))) {
         message("所属レジスタのチェックを外してからグループを削除してください。", true);
         return;
     }
+    if (!confirmDelete("部分初期化グループ", group.label.trim() || group.id))
+        return;
     project.resetGroupDefs.splice(index, 1);
     renderResetGroups();
     renderTable();

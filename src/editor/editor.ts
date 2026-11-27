@@ -23,6 +23,11 @@ function rowIndex(element: HTMLElement): number | null {
   return index === undefined ? null : unsigned(index);
 }
 
+function confirmDelete(kind: string, name: string): boolean {
+  const label = name.trim();
+  return window.confirm(label ? `${kind}「${label}」を削除しますか？` : `${kind}を削除しますか？`);
+}
+
 function download(filename: string, data: BlobPart, contentType: string) {
   const url = URL.createObjectURL(new Blob([data], {type: contentType}));
   const link = document.createElement("a");
@@ -88,14 +93,11 @@ const fileInput = $("file", HTMLInputElement);
 const searchInput = $("search", HTMLInputElement);
 const typeFilter = $("type-filter", HTMLSelectElement);
 const configInputs = {
-  slaveAddress: $("slave-address", HTMLInputElement),
   nvmSize: $("nvm-size", HTMLInputElement)
 };
 const detailDialog = $("detail-dialog", HTMLDialogElement);
 const codeDialog = $("code-dialog", HTMLDialogElement);
 const codeSelection = $("code-selection", HTMLSelectElement);
-const lengthDialog = $("length-dialog", HTMLDialogElement);
-const resetGroupDialog = $("reset-group-dialog", HTMLDialogElement);
 const issueDialog = $("issue-dialog", HTMLDialogElement);
 
 let project = sampleProject();
@@ -125,7 +127,7 @@ function updateValidation() {
     warnings.length ? "検証済み · 注意 " + warnings.length + " 件" : "入力チェック OK";
   document.querySelectorAll('[aria-invalid="true"]').forEach(element => element.removeAttribute("aria-invalid"));
   for (const issue of errors) {
-    if (issue.field === "slaveAddress" || issue.field === "nvmSize") {
+    if (issue.field === "nvmSize") {
       configInputs[issue.field].setAttribute("aria-invalid", "true");
     }
     if (issue.row !== null) {
@@ -158,9 +160,10 @@ function registerMarkup(row: DraftRegister, index: number) {
   const selection = row.enumDomain;
   const definition = selection && project.enums.find(item => item.id === selection.enumId);
   const member = definition && definition.members.find(item => item.id === selection?.defaultMemberId);
-  const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell"><span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}</td><td class="enum-cell bitset-cell">${Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力"}</td>` : selection ? `<td colspan="2" class="enum-cell">
-    <span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}
-    </td><td class="enum-cell">${member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択"}</td>` :
+  const detailValue = (content: string) => `<button type="button" class="enum-detail-trigger" data-field="detail" aria-label="${escapeHtml(row.name.trim() || String(index + 1))} の詳細を開く" title="詳細を開く">${content}</button>`;
+  const valueCells = row.bitsetDomain ? `<td colspan="2" class="enum-cell bitset-cell">${detailValue(`<span class="badge">ビット</span> ${escapeHtml(project.bitsetDefs.find(item => item.id === row.bitsetDomain?.bitsetId)?.label ?? "定義を選択")}`)}</td><td class="enum-cell bitset-cell">${detailValue(Number.isSafeInteger(row.bitsetDomain.default) ? bitsetHex(row.bitsetDomain.default, row.type === "uint32_t" ? 32 : 16) : "初期値を入力")}</td>` : selection ? `<td colspan="2" class="enum-cell">
+    ${detailValue(`<span class="badge">列挙型</span> ${escapeHtml(definition?.label ?? "列挙型を選択")}`)}
+    </td><td class="enum-cell">${detailValue(member ? escapeHtml(member.label) + "（" + member.value + "）" : "初期値を選択")}</td>` :
     input("min", reserved || string) + input("max", reserved || string) + input("default", reserved);
   return `<tr data-index="${index}">
     ${input("address")}${input("name")}${type}${input("length")}${access}${valueCells}${input("nvmOffset", reserved)}
@@ -203,7 +206,6 @@ function renderResetGroups() {
 function replaceProject(next: DraftProject, name: string, enumForm: EnumFormDraft | null = null, bitsetForm: BitsetFormDraft | null = null) {
   project = next;
   sourceName = name;
-  configInputs.slaveAddress.value = project.config.slaveAddress;
   configInputs.nvmSize.value = project.config.nvmSize;
   searchInput.value = "";
   typeFilter.value = "";
@@ -324,7 +326,7 @@ $("save-zip").addEventListener("click", () => {
   message("C/HのZIPダウンロードを開始しました。");
 });
 $("validation-button").addEventListener("click", showIssues);
-for (const field of ["slaveAddress", "nvmSize"] as const) {
+for (const field of ["nvmSize"] as const) {
   const input = configInputs[field];
   input.addEventListener("input", () => {
     project.config[field] = input.value;
@@ -372,8 +374,10 @@ $("register-body").addEventListener("input", event => {
 });
 $("register-body").addEventListener("click", event => {
   const {target} = event;
-  if (!(target instanceof HTMLButtonElement) || target.dataset.field !== "detail") return;
-  const index = rowIndex(target);
+  if (!(target instanceof Element)) return;
+  const button = target.closest<HTMLButtonElement>('button[data-field="detail"]');
+  if (!button) return;
+  const index = rowIndex(button);
   if (index !== null) openDetail(index);
 });
 $("detail-body").addEventListener("input", event => {
@@ -396,12 +400,13 @@ $("detail-body").addEventListener("input", event => {
 });
 detailDialog.addEventListener("close", renderTable);
 $("delete-row").addEventListener("click", () => {
+  const row = project.registers[detailIndex];
+  if (!row || !confirmDelete("レジスタ", row.name)) return;
   project.registers.splice(detailIndex, 1);
   detailDialog.close();
   recordEdit();
   renderTable();
 });
-$("open-lengths").addEventListener("click", () => lengthDialog.showModal());
 $("add-length").addEventListener("click", () => {
   project.lengthDefs.push({name: "", length: "1"});
   renderLengths();
@@ -424,11 +429,12 @@ $("length-body").addEventListener("click", event => {
   if (!(target instanceof HTMLButtonElement) || !Object.hasOwn(target.dataset, "deleteLength")) return;
   const index = rowIndex(target);
   if (index === null) return;
+  const row = project.lengthDefs[index];
+  if (!row || !confirmDelete("配列長定義", row.name)) return;
   project.lengthDefs.splice(index, 1);
   renderLengths();
   recordEdit();
 });
-$("open-reset-groups").addEventListener("click", () => resetGroupDialog.showModal());
 $("add-reset-group").addEventListener("click", () => {
   project.resetGroupDefs.push({id: "", label: ""});
   renderResetGroups();
@@ -456,10 +462,12 @@ $("reset-group-body").addEventListener("click", event => {
   const index = rowIndex(target);
   if (index === null) return;
   const group = project.resetGroupDefs[index];
+  if (!group) return;
   if (project.registers.some(row => row.resetGroups.includes(group.id))) {
     message("所属レジスタのチェックを外してからグループを削除してください。", true);
     return;
   }
+  if (!confirmDelete("部分初期化グループ", group.label.trim() || group.id)) return;
   project.resetGroupDefs.splice(index, 1);
   renderResetGroups();
   renderTable();

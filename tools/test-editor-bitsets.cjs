@@ -14,11 +14,12 @@ function draft() {
 }
 function generate(p=draft()) {const result=core.inspectProject(p);assert.equal(result.errors.length,0,JSON.stringify(result.errors));return {doc:result.validated.documentValue,files:core.generateModbusFiles(result.validated)};}
 
-test("schema 6 roundtrips bitsets and schema 4 preserves reset groups",()=>{
- const {doc}=generate();assert.equal(doc.schemaVersion,6);assert.deepEqual(plain(generate(core.decodeProject(plain(doc)).project).doc),plain(doc));
- const old=generate(core.sampleProject()).doc;old.schemaVersion=4;delete old.bitsetDefs;
- const loaded=core.decodeProject(plain(old)).project;assert.deepEqual(plain(loaded.bitsetDefs),[]);assert.deepEqual(plain(loaded.resetGroupDefs),plain(old.resetGroupDefs));
+test("schema 7 roundtrips bitsets and reset groups",()=>{
+ const {doc}=generate();assert.equal(doc.schemaVersion,7);assert.deepEqual(plain(generate(core.decodeProject(plain(doc)).project).doc),plain(doc));
+ const current=generate(core.sampleProject()).doc;
+ const loaded=core.decodeProject(plain(current)).project;assert.deepEqual(plain(loaded.resetGroupDefs),plain(current.resetGroupDefs));
 });
+
 test("invalid widths, duplicate positions/names, fields, types and references are rejected",()=>{
  const changes=[p=>p.bitsetDefs[0].width=8,p=>p.bitsetDefs[0].bits[1].bit=16,p=>p.bitsetDefs[0].bits[0].bit=-1,
  p=>p.bitsetDefs[0].bits[0].bit=0.5,p=>p.bitsetDefs[0].bits[1].bit=0,p=>p.bitsetDefs[0].bits[1].id="low",
@@ -92,15 +93,15 @@ test("actual detail events synchronize hex and bit-31 checkbox while retaining r
  field.value="invalid";field.events.input();assert.equal(core.inspectProject(p).validated,null);assert.equal(row.bitsetDomain.default,0xfffffffe);assert.ok(edits>=6);
 });
 
-test("HTML draft loader migrates old drafts and preserves unfinished bitset forms",()=>{
+test("HTML draft loader rejects old drafts and preserves current unfinished bitset forms",()=>{
  const {source}=editorSource();
  const names=["isObject","isList","TEXT_FIELDS","FLAGS","decodeEnum","decodeBitset"];
  const c=vm.createContext(Object.fromEntries(names.map(name=>[name,vm.runInContext(name,core)])));
  vm.runInContext(editorFunction(source,"parseHtmlDraft"),c);
  const old={version:1,sourceName:"old.json",project:core.sampleProject(),enumForm:null};delete old.project.bitsetDefs;
  for(const row of old.project.registers)delete row.bitsetDomain;
- const migrated=c.parseHtmlDraft(JSON.stringify(old));assert.deepEqual(plain(migrated.project.bitsetDefs),[]);assert.ok(migrated.project.registers.every(row=>row.bitsetDomain===null));
- const current={version:1,sourceName:"bits.json",project:draft(),enumForm:null,bitsetForm:{index:null,id:"pending",label:"Pending",width:"32",bits:[{bit:"",id:"",label:""}]}};
+ assert.throws(()=>c.parseHtmlDraft(JSON.stringify(old)));
+ const current={version:2,sourceName:"bits.json",project:draft(),enumForm:null,bitsetForm:{index:null,id:"pending",label:"Pending",width:"32",bits:[{bit:"",id:"",label:""}]}};
  assert.deepEqual(plain(c.parseHtmlDraft(JSON.stringify(current)).bitsetForm),current.bitsetForm);
  current.bitsetForm.bits[0].bit=31;assert.throws(()=>c.parseHtmlDraft(JSON.stringify(current)));
 });

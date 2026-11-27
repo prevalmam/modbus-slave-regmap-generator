@@ -1,7 +1,7 @@
 "use strict";
 
 const FORMAT = "modbus-slave-regmap";
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 const UNUSED = "-";
 const NUMERIC_TYPES = ["uint16_t", "uint32_t", "float"] as const;
 const TYPES = [...NUMERIC_TYPES, "string", "reserved"] as const;
@@ -35,7 +35,7 @@ type DraftRegister = RegisterFlags & Record<typeof TEXT_FIELDS[number], string> 
   resetGroups: string[];
 };
 type DraftProject = {
-  config: {slaveAddress: string; nvmSize: string};
+  config: {nvmSize: string};
   lengthDefs: {name: string; length: string}[];
   enums: RegisterEnum[];
   bitsetDefs: BitsetDefinition[];
@@ -56,7 +56,7 @@ type RegisterDefinition = RegisterFlags & RegisterNotes & {
 type RegmapDocument = {
   format: typeof FORMAT;
   schemaVersion: typeof SCHEMA_VERSION;
-  config: {slaveAddress: number; nvmSize: number};
+  config: {nvmSize: number};
   lengthDefs: {name: string; length: number}[];
   enums: RegisterEnum[];
   bitsetDefs: BitsetDefinition[];
@@ -148,7 +148,7 @@ function draftRow(data: Record<string, unknown> = {}): DraftRegister {
 
 function sampleProject(): DraftProject {
   return {
-    config: {slaveAddress: "1", nvmSize: "256"},
+    config: {nvmSize: "256"},
     bitsetDefs: [],
     resetGroupDefs: [{id: "settings", label: "設定の初期化"}],
     lengthDefs: [{name: "NAME_LEN", length: "12"}],
@@ -291,86 +291,72 @@ function decodeProject(input: unknown): {project: DraftProject; hint: string} {
   const {source, rows} = documentValue;
   if (isObject(source) && source.sheet === "RegisterTable" && isList(rows)) {
     return {
-      project: {config: {slaveAddress: "", nvmSize: ""}, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
+      project: {config: {nvmSize: ""}, lengthDefs: [], enums: [], bitsetDefs: [], resetGroupDefs: [],
         registers: rows.map(importTableRow)},
-      hint: "レジスタ表を読み込みました。スレーブアドレスとNVMサイズを入力してください。"
+      hint: "レジスタ表を読み込みました。NVMサイズを入力してください。"
     };
   }
   const {format, schemaVersion, config, lengthDefs, registers, enums, resetGroupDefs, bitsetDefs} = documentValue;
-  const legacy = schemaVersion === 1;
-  const hasDomains = schemaVersion === 3 || schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
-  const hasResetGroups = schemaVersion === 4 || schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
-  const hasBitsets = schemaVersion === 5 || schemaVersion === SCHEMA_VERSION;
   const invalid = "このエディターで保存したJSON、またはRegisterTable.jsonを選んでください。";
-  const fields = legacy ? TABLE_FIELDS : [...TABLE_FIELDS.filter(field => !hasDomains ||
+  const fields = [...TABLE_FIELDS.filter(field =>
     (field !== "min" && field !== "max" && field !== "default")), ...FLAGS, ...DETAIL_TEXT_FIELDS];
-  if (format !== FORMAT || (!legacy && schemaVersion !== 2 && !hasDomains) || !isObject(config) ||
+  if (format !== FORMAT || schemaVersion !== SCHEMA_VERSION || !isObject(config) ||
       !isList(lengthDefs) || !isList(registers) ||
-      !["slaveAddress", "nvmSize"].every(key => Object.hasOwn(config, key) && isScalar(config[key]))) {
+      Object.keys(config).length !== 1 || !Object.hasOwn(config, "nvmSize") || !isScalar(config.nvmSize)) {
     throw Error(invalid);
   }
 
-  if (hasDomains && !isList(enums)) throw Error(invalid);
-  if (hasBitsets && !isList(bitsetDefs)) throw Error(invalid);
-  if (hasResetGroups && (!isList(resetGroupDefs) ||
-      !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string"))) {
+  if (!isList(enums) || !isList(bitsetDefs)) throw Error(invalid);
+  if (!isList(resetGroupDefs) ||
+      !resetGroupDefs.every(group => isObject(group) && typeof group.id === "string" && typeof group.label === "string")) {
     throw Error(invalid);
   }
-  const definitions = hasDomains && isList(enums) ? enums.map(value => decodeEnum(value, invalid)) : [];
+  const definitions = enums.map(value => decodeEnum(value, invalid));
   const project: DraftProject = {
-    config: {slaveAddress: scalarText(config.slaveAddress), nvmSize: scalarText(config.nvmSize)},
+    config: {nvmSize: scalarText(config.nvmSize)},
     enums: definitions,
-    bitsetDefs: hasBitsets && isList(bitsetDefs) ? bitsetDefs.map(value => decodeBitset(value, invalid)) : [],
-    resetGroupDefs: hasResetGroups ?
-      (resetGroupDefs as ResetGroupDefinition[]).map(group => ({...group})) : [],
+    bitsetDefs: bitsetDefs.map(value => decodeBitset(value, invalid)),
+    resetGroupDefs: (resetGroupDefs as ResetGroupDefinition[]).map(group => ({...group})),
     lengthDefs: lengthDefs.map(row => {
       if (!isObject(row) || typeof row.name !== "string" || !isScalar(row.length)) throw Error(invalid);
       return {name: row.name, length: scalarText(row.length)};
     }),
     registers: registers.map(row => {
       if (!isObject(row) || !fields.every(key => Object.hasOwn(row, key))) throw Error(invalid);
-      if (hasResetGroups && (!isList(row.resetGroups) ||
-          !row.resetGroups.every(id => typeof id === "string"))) throw Error(invalid);
-      if (hasDomains) {
-        const domain = row.valueDomain;
-        if (!isObject(domain)) throw Error(invalid);
-        if (hasBitsets && domain.kind === "bitset" &&
-            typeof domain.bitsetId === "string" && typeof domain.default === "number") {
-          return {...draftRow({...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default}),
-            bitsetDomain: {kind: "bitset", bitsetId: domain.bitsetId, default: domain.default}};
-        }
-        if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
-          const definition = definitions.find(item => item.id === domain.enumId);
-          const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
-          return {...draftRow({...row, ...range}), enumDomain: {kind: "enum", enumId: domain.enumId,
-            defaultMemberId: domain.defaultMemberId}};
-        }
-        if (row.type === "string" && domain.kind === "string" && typeof domain.default === "string") {
-          return draftRow({...row, default: domain.default});
-        }
-        if (row.type === "reserved" && domain.kind === "reserved") return draftRow(row);
-        if (isOneOf(NUMERIC_TYPES, row.type) && domain.kind === "range" && typeof domain.min === "number" &&
-            typeof domain.max === "number" && typeof domain.default === "number") {
-          return draftRow({...row, min: domain.min, max: domain.max, default: domain.default});
-        }
-        throw Error(invalid);
+      if (!isList(row.resetGroups) || !row.resetGroups.every(id => typeof id === "string")) throw Error(invalid);
+      const domain = row.valueDomain;
+      if (!isObject(domain)) throw Error(invalid);
+      if (domain.kind === "bitset" && typeof domain.bitsetId === "string" && typeof domain.default === "number") {
+        return {...draftRow({...row, min: 0, max: row.type === "uint32_t" ? 4294967295 : 65535, default: domain.default}),
+          bitsetDomain: {kind: "bitset", bitsetId: domain.bitsetId, default: domain.default}};
       }
-      if (!legacy) return draftRow(row);
-      const notes = Object.fromEntries(NOTES.map(key => [key, scalarText(row[key]).trim() ? row[key] : UNUSED]));
-      return draftRow({...row, groupValidate: row.groupValidate ?? null, ...notes});
+      if (domain.kind === "enum" && typeof domain.enumId === "string" && typeof domain.defaultMemberId === "string") {
+        const definition = definitions.find(item => item.id === domain.enumId);
+        const range = definition ? enumRange(definition, domain.defaultMemberId) : null;
+        return {...draftRow({...row, ...range}), enumDomain: {kind: "enum", enumId: domain.enumId,
+          defaultMemberId: domain.defaultMemberId}};
+      }
+      if (row.type === "string" && domain.kind === "string" && typeof domain.default === "string") {
+        return draftRow({...row, default: domain.default});
+      }
+      if (row.type === "reserved" && domain.kind === "reserved") return draftRow(row);
+      if (isOneOf(NUMERIC_TYPES, row.type) && domain.kind === "range" && typeof domain.min === "number" &&
+          typeof domain.max === "number" && typeof domain.default === "number") {
+        return draftRow({...row, min: domain.min, max: domain.max, default: domain.default});
+      }
+      throw Error(invalid);
     })
   };
-  return {project, hint: legacy ? "旧版のJSONを読み込みました。NVM・グループ検証の未指定欄を確認してください。" : "JSONを読み込みました。"};
+  return {project, hint: "JSONを読み込みました。"};
 }
 
 function inspectProject(project: DraftProject): Inspection {
   const errors: Issue[] = [];
   const warnings: string[] = [];
   const issue = (text: string, row: number | null = null, field = "") => errors.push({text, row, field});
-  const slaveAddress = unsigned(project.config.slaveAddress);
   const nvmSize = unsigned(project.config.nvmSize);
-  if (slaveAddress === null || slaveAddress < 1 || slaveAddress > 247) {
-    issue("スレーブアドレスは1〜247の整数を入力してください。", null, "slaveAddress");
+  if (Object.keys(project.config).length !== 1) {
+    issue("基本設定はNVMサイズを指定してください。", null, "nvmSize");
   }
   if (nvmSize === null || nvmSize < 1 || nvmSize > 65535) {
     issue("NVMサイズは1〜65535 Bの整数を入力してください。", null, "nvmSize");
@@ -408,7 +394,7 @@ function inspectProject(project: DraftProject): Inspection {
     "reg_type_t", "access_mode_t", "reg_table_entry_t", "modbus_write_result_t", "modbus_reg_snapshot_t",
     "modbus_string_view_t", "modbus_reg_update_source_t", "modbus_reg_enum_wire_value_is_valid",
     "MODBUS_REG_ENUMS_SLAVE_H", "MODBUS_REG_ENUM_INTERNAL_SLAVE_H",
-    "MODBUS_SLAVE_ADDR", "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
+    "NVM_TOTAL_SIZE", "NVM_MAX_OFFSET", "NVM_OFFSET_UNUSED",
     "NVM_MAX_ENTRY_SIZE_BYTES", "ACCESS_INTERNAL",
     ...lengths.keys(), ...project.registers.map(row => row.name.trim())
   ]);
@@ -625,11 +611,11 @@ function inspectProject(project: DraftProject): Inspection {
   }
   checkOverlap(addressRanges, "address", "アドレス範囲");
   checkOverlap(nvmRanges, "nvmOffset", "NVM範囲");
-  if (errors.length || slaveAddress === null || nvmSize === null) {
+  if (errors.length || nvmSize === null) {
     return {errors, warnings, counts, validated: null};
   }
   const documentValue: RegmapDocument = {
-    format: FORMAT, schemaVersion: SCHEMA_VERSION, config: {slaveAddress, nvmSize},
+    format: FORMAT, schemaVersion: SCHEMA_VERSION, config: {nvmSize},
     lengthDefs, enums: project.enums, bitsetDefs: project.bitsetDefs ?? [], resetGroupDefs, registers
   };
   return {errors, warnings, counts, validated: {documentValue, counts: registerCounts}};

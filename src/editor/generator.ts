@@ -86,7 +86,7 @@ function stringInitializer(text: string, length: number): string {
   return "{" + bytes.concat(Array<string>(length - bytes.length).fill("0x00")).join(", ") + "}";
 }
 
-function generateRegisterIndex(entries: readonly GeneratorEntry[], slaveAddress: number): string {
+function generateRegisterIndex(entries: readonly GeneratorEntry[]): string {
   const definitions: string[] = [];
   entries.forEach((entry, index) => {
     const macro = indexMacro(entry);
@@ -96,7 +96,7 @@ function generateRegisterIndex(entries: readonly GeneratorEntry[], slaveAddress:
     }
   });
   return ["#ifndef MODBUS_REG_IDX_SLAVE_H", "#define MODBUS_REG_IDX_SLAVE_H", "",
-    "#define MODBUS_SLAVE_ADDR " + slaveAddress, "", "/* Modbus register index definitions */",
+    "/* Modbus register index definitions */",
     ...definitions, "", "#endif", ""].join("\n");
 }
 
@@ -711,7 +711,7 @@ function generateModbusFiles(validated: ValidatedProject): GeneratedFiles {
     ...generateEnums(enums, entries),
     ...generateBitsetTypes(validated.documentValue.bitsetDefs),
     ...generateRegisterMap(validated.documentValue, entries),
-    "modbus_reg_idx_slave.h": generateRegisterIndex(entries, validated.documentValue.config.slaveAddress),
+    "modbus_reg_idx_slave.h": generateRegisterIndex(entries),
     ...generateAccess(entries),
     ...generateNotifications(entries),
     ...generateWriteGuards(entries, groups),
