@@ -474,6 +474,7 @@ $("reset-group-body").addEventListener("click", event => {
   recordEdit();
 });
 
+$("open-ai-guide").addEventListener("click", () => $("ai-guide", HTMLDialogElement).showModal());
 document.querySelectorAll("[data-close]").forEach(button => {
   button.addEventListener("click", () => button.closest("dialog")?.close());
 });

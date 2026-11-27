@@ -151,6 +151,9 @@ textarea { resize: vertical; }
 #code-dialog { width: min(940px, calc(100% - 24px)); }
 #code { max-height: 50vh; overflow: auto; padding: 13px; background: #13283b; color: #e4f2f8; border-radius: 7px; tab-size: 4; }
 #code-selection { max-width: 100%; }
+#ai-guide { width: min(900px, calc(100% - 24px)); }
+#ai-guide .dialog-body { max-height: 65vh; overflow: auto; }
+#ai-guide pre { padding: 10px; background: var(--paper); border-radius: 5px; overflow: auto; }
 #issue-list { max-height: 50vh; overflow: auto; margin: 0; padding-left: 22px; }
 #issue-list li { margin-bottom: 5px; }
 #length-body td:last-child { width: 75px; }
@@ -260,6 +263,7 @@ textarea { resize: vertical; }
       <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
     <div class="actions" id="register-actions">
+      <button type="button" class="small" id="open-ai-guide" aria-haspopup="dialog" aria-controls="ai-guide">AIとの編集ガイド</button>
       <button type="button" id="save-json" title="外部ツールでの利用や、新版HTMLへの移行用">JSONをエクスポート</button>
       <button type="button" class="primary" id="open-code">C/H 一括生成</button>
     </div>
@@ -462,6 +466,31 @@ textarea { resize: vertical; }
   </div>
 </dialog>
 
+<dialog id="ai-guide" aria-labelledby="ai-guide-title">
+  <div class="dialog-title"><h2 id="ai-guide-title">AIとの編集ガイド</h2><button type="button" data-close>閉じる</button></div>
+  <div class="dialog-body">
+    <p>このHTMLは定義データと検査・C/H生成機能を含む正本です。AIに依頼するときは、対象のHTMLと変更したい内容を渡します。</p>
+    <h3>AIの方々へ</h3>
+    <ol>
+      <li>作業を「製品定義の編集」か「生成器自体の改修」かに分け、対象HTMLと変更前のコピーを確認します。</li>
+      <li>定義は <code>script#html-project-data</code> 内のJSONです。保存データの <code>version: 2</code> と <code>project</code> を読み、既存の項目と同じ型で編集します。JSONエクスポート形式は <code>schemaVersion: 7</code> です。</li>
+      <li>製品定義の編集では、対象の定義だけを変更し、HTML内のスクリプト・スタイル・このガイドを保持します。埋め込むJSONは <code>&lt;</code> を <code>\u003c</code> にエスケープします。</li>
+      <li><code>enumForm</code> と <code>bitsetForm</code> は登録前の編集内容です。登録済みの定義は <code>project.enums</code> と <code>project.bitsetDefs</code> にあります。登録前の編集は登録または破棄の方針を確認します。</li>
+      <li>検査には対象HTML自身の <code>parseHtmlDraft</code>・<code>inspectProject</code>、C/H生成には <code>generateModbusFiles</code> を使います。下の共通コマンドでブラウザーを開かずに実行できます。</li>
+      <li>変更前後の定義とC/Hを比較し、既存の番地・型・初期値・NVM配置・グループ所属への影響を確認します。通信公開の要否、既存配置の変更、保存データの移行は製品の仕様として判断します。</li>
+    </ol>
+    <h3>共通コマンド</h3>
+    <pre><code>node tools/check-html.cjs product.html
+node tools/check-html.cjs product.html --compare before.html
+node tools/check-html.cjs product.html --out-dir generated</code></pre>
+    <p><code>tools/check-html.cjs</code> はNode.jsの標準機能だけで動き、このツールと対象HTMLの2ファイルでも使えます。通常は読取り専用で検査・生成を試行し、<code>--out-dir</code> 指定時にC/Hを書き出します。未登録のフォーム編集がある場合は、登録・破棄後に再検査します。</p>
+    <h3>検証の範囲と所要時間</h3>
+    <p>定義の編集は対象HTMLの検査と変更前後の比較を基本にします。生成器の改修は型チェック・HTML生成と、変更した処理のテストを追加します。成功済みで入力と依存先が変わっていない確認結果を再利用します。</p>
+    <p>検査・C/H生成は通常1秒前後、生成器の型チェック・HTML生成・Node.jsテストは通常数秒が目安です。コマンドは <code>elapsedMs</code> を返します。AIの読解・編集時間、製品側の表示物再生成・ビルド・実機確認は分けて報告します。表示の見え方は人が確認します。</p>
+    <p>詳細手順・人への確認事項・コマンドの入手先は、<a href="https://github.com/prevalmam/modbus-slave-regmap-generator#ai-collaboration" target="_blank" rel="noopener">READMEの「AIの方々へ」</a>にまとめています。</p>
+  </div>
+</dialog>
+
 <dialog id="html-unsaved-dialog" aria-labelledby="html-unsaved-title">
   <div class="dialog-title"><h2 id="html-unsaved-title">未保存の編集があります</h2></div>
   <div class="dialog-body">
@@ -488,6 +517,7 @@ textarea { resize: vertical; }
   </div>
 </dialog>
 
+<!-- AI collaboration entry: #ai-guide. Canonical definition: #html-project-data. -->
 <script id="html-project-data" type="application/json">{"version":2,"sourceName":"サンプル","project":{"config":{"nvmSize":"256"},"lengthDefs":[{"name":"NAME_LEN","length":"12"}],"enums":[{"id":"modbus_parity","label":"Modbusパリティ","members":[{"id":"none","value":0,"label":"なし"},{"id":"odd","value":1,"label":"奇数"},{"id":"even","value":2,"label":"偶数"}]},{"id":"modbus_operation_status","label":"運転状態","members":[{"id":"init","value":0,"label":"初期化"},{"id":"meas","value":1,"label":"測定"},{"id":"stby","value":2,"label":"待機"},{"id":"wash","value":3,"label":"洗浄"},{"id":"cal","value":4,"label":"校正"},{"id":"manual_cal","value":5,"label":"手動校正"}]}],"registers":[{"address":"0","name":"Measurement","type":"float","length":"1","access":"RO","min":"-100","max":"100","default":"1","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"測定値の表示例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"32","name":"DeviceName","type":"string","length":"NAME_LEN","access":"RO","min":"-","max":"-","default":"\"MODBUS DEMO\"","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"56","name":"OperationStatus","type":"uint16_t","length":"1","access":"RW","min":"0","max":"5","default":"0","nvmOffset":"-","updateNotify":true,"busyReject":false,"writeCheck":true,"groupValidate":"-","unit":"-","summary":"運転状態の書き込み判定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_operation_status","defaultMemberId":"init"}},{"address":"106","name":"ModbusBaudrate","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"1","nvmOffset":"0x000C","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"通信速度の設定例","description":"-","spec":"-","notes":"-","enumDomain":null},{"address":"107","name":"ModbusParityBit","type":"uint16_t","length":"1","access":"RW","min":"0","max":"2","default":"0","nvmOffset":"0x000E","updateNotify":true,"busyReject":false,"writeCheck":false,"groupValidate":"serial_settings","unit":"-","summary":"パリティの設定例","description":"-","spec":"-","notes":"-","enumDomain":{"kind":"enum","enumId":"modbus_parity","defaultMemberId":"none"}},{"address":"108","name":"reserved_108","type":"reserved","length":"2","access":"-","min":"-","max":"-","default":"-","nvmOffset":"-","updateNotify":false,"busyReject":false,"writeCheck":false,"groupValidate":"-","unit":"-","summary":"-","description":"-","spec":"-","notes":"-","enumDomain":null}]},"enumForm":null}</script>
 <script>
 "use strict";
@@ -4486,6 +4516,7 @@ $("reset-group-body").addEventListener("click", event => {
     renderTable();
     recordEdit();
 });
+$("open-ai-guide").addEventListener("click", () => $("ai-guide", HTMLDialogElement).showModal());
 document.querySelectorAll("[data-close]").forEach(button => {
     button.addEventListener("click", () => button.closest("dialog")?.close());
 });
