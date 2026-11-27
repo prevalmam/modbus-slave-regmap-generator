@@ -1924,18 +1924,26 @@ typedef union
 static modbus_write_scratch_t s_write_scratch;
 
 static const reg_table_entry_t *find_entry_at_address(
-    uint16_t address, uint16_t *table_index)
+    uint16_t address, uint16_t *table_index, uint16_t *cursor)
 {
     uint16_t i;
+    uint16_t scanned;
 
-    for (i = 0U; i < g_reg_table_slave_size; ++i)
+    i = *cursor;
+    for (scanned = 0U; scanned < g_reg_table_slave_size; ++scanned)
     {
+        if (i >= g_reg_table_slave_size)
+        {
+            i = 0U;
+        }
         if ((g_reg_table_slave[i].access != ACCESS_INTERNAL) &&
             (g_reg_table_slave[i].modbus_addr == address))
         {
             *table_index = i;
+            *cursor = (uint16_t)(i + 1U);
             return &g_reg_table_slave[i];
         }
+        ++i;
     }
     return (const reg_table_entry_t *)0;
 }
@@ -2131,6 +2139,8 @@ static int handle_modbus_multi_write(uint16_t start_addr,
     uint16_t end_addr;
     uint16_t expected;
     uint16_t table_index;
+    uint16_t cursor;
+    uint16_t first_index;
     uint16_t entry_regs;
     uint16_t front;
     uint16_t back;
@@ -2155,10 +2165,12 @@ static int handle_modbus_multi_write(uint16_t start_addr,
     }
     end_addr = (uint16_t)end_addr32;
 
+    cursor = 0U;
+    first_index = 0U;
     expected = start_addr;
     while (expected != end_addr)
     {
-        entry = find_entry_at_address(expected, &table_index);
+        entry = find_entry_at_address(expected, &table_index, &cursor);
         if ((entry == (const reg_table_entry_t *)0) ||
             (entry->type == REG_TYPE_RESERVED) ||
             (entry->access == ACCESS_READ) ||
@@ -2176,15 +2188,20 @@ static int handle_modbus_multi_write(uint16_t start_addr,
         {
             return MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY;
         }
+        if (expected == start_addr)
+        {
+            first_index = table_index;
+        }
         expected = (uint16_t)(expected + entry_regs);
     }
 
     snapshot_initialize(&snapshot);
     scratch_reset(&front, &back);
+    cursor = first_index;
     expected = start_addr;
     while (expected != end_addr)
     {
-        entry = find_entry_at_address(expected, &table_index);
+        entry = find_entry_at_address(expected, &table_index, &cursor);
         after_value = scratch_allocate(entry, &front, &back);
         if (after_value == (void *)0)
         {
@@ -2209,10 +2226,11 @@ static int handle_modbus_multi_write(uint16_t start_addr,
 @GROUP_VALIDATE@
 
     scratch_reset(&front, &back);
+    cursor = first_index;
     expected = start_addr;
     while (expected != end_addr)
     {
-        entry = find_entry_at_address(expected, &table_index);
+        entry = find_entry_at_address(expected, &table_index, &cursor);
         after_value = scratch_allocate(entry, &front, &back);
         if (memcmp(entry->ram_ptr, after_value, entry->size) != 0)
         {
