@@ -126,6 +126,10 @@ td.empty { padding: 28px 12px; text-align: center; color: var(--muted); }
 #validation-button[data-state="bad"] { color: var(--error); border-color: #e6bdb5; background: #fff6f4; }
 #validation-button[data-state="ok"] { color: var(--accent); background: var(--soft); border-color: #bbded5; }
 .notice { margin: 11px 1px 0; color: var(--muted); font-size: .9rem; }
+.editor-footer { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; margin: 11px 1px 0; }
+.editor-footer .notice { flex: 0 1 auto; margin: 0; }
+#open-license { flex: none; margin-left: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 400; }
+#open-license:hover { text-decoration: underline; }
 #message { color: var(--accent); font-weight: 650; }
 #message.error { color: var(--error); }
 dialog { width: min(580px, calc(100% - 24px)); border: 1px solid #b9c9d7; border-radius: 13px; padding: 0; color: var(--ink); box-shadow: 0 14px 54px #0c243d44; }
@@ -265,7 +269,6 @@ textarea { resize: vertical; }
       <p>レジスタ定義を編集し、このHTMLに保存します。保存したHTMLを開くと続きから編集できます。アドレスに「-」を指定すると内部専用になります。</p>
     </div>
     <div class="actions" id="register-actions">
-      <button type="button" class="plain small" id="open-license" aria-haspopup="dialog" aria-controls="license-dialog">ライセンス</button>
       <button type="button" class="small" id="open-ai-guide" aria-haspopup="dialog" aria-controls="ai-guide">AIとの編集ガイド</button>
       <button type="button" id="save-json" title="外部ツールでの利用や、新版HTMLへの移行用">JSONをエクスポート</button>
       <button type="button" class="primary" id="open-code">C/H 一括生成</button>
@@ -315,7 +318,6 @@ textarea { resize: vertical; }
       <p class="input-hint">NVM未使用は <code>-</code>。文字列は引用符で囲み、空文字列は <code>""</code> と入力します。</p>
     </div>
   </section>
-  <p class="notice">C/H出力ではレジスタ定義、アクセサ、書き込みガード、更新通知、パーサーを生成します。</p>
   </div>
 
   <section class="editor-panel" id="enum-panel" role="tabpanel" aria-labelledby="enum-tab" hidden>
@@ -393,6 +395,10 @@ textarea { resize: vertical; }
       </div>
     </section>
   </section>
+  <footer class="editor-footer">
+    <p class="notice">C/H出力ではレジスタ定義、アクセサ、書き込みガード、更新通知、パーサーを生成します。</p>
+      <button type="button" class="plain" id="open-license" aria-haspopup="dialog" aria-controls="license-dialog">ライセンス</button>
+  </footer>
 </main>
 
 <dialog id="detail-dialog" aria-labelledby="detail-title">
