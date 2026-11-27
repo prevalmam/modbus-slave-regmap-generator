@@ -252,8 +252,6 @@ const PARSER_SOURCE = String.raw`#include "modbus_parser.h"
 #define MODBUS_REG_SIZE_BYTES    (2U)
 #define MODBUS_MAX_DATA_LENGTH   (252U)
 
-#define MAX_MATCHED_ENTRIES 256U
-
 #define FLOAT_EPSILON (1.0e-6f)
 
 static int check_range_float(float val, float min, float max);
@@ -275,7 +273,9 @@ static int modbus_validate_crc(const uint8_t* frame, uint16_t length);
 static uint16_t modbus_append_crc(uint8_t* frame, uint16_t len_without_crc);
 int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs);
 
-static void sort_entries_by_address(const reg_table_entry_t *matched[], uint16_t count);
+static const reg_table_entry_t *find_read_entry_at_address(uint16_t address,
+                                                         uint16_t end_addr,
+                                                         uint16_t *cursor);
 
 int is_float_equal(float a, float b)
 {
@@ -283,23 +283,39 @@ int is_float_equal(float a, float b)
     return (diff < FLOAT_EPSILON) && (diff > -FLOAT_EPSILON);
 }
 
-void sort_entries_by_address(const reg_table_entry_t *matched[], uint16_t count)
+static const reg_table_entry_t *find_read_entry_at_address(uint16_t address,
+                                                         uint16_t end_addr,
+                                                         uint16_t *cursor)
 {
-    uint16_t i, j;
-    const reg_table_entry_t *tmp;
+    uint16_t i;
+    uint16_t scanned;
+    uint16_t total_regs;
+    const reg_table_entry_t *entry;
 
-    for (i = 0U; i < count; ++i)
+    i = *cursor;
+    for (scanned = 0U; scanned < g_reg_table_slave_size; ++scanned)
     {
-        for (j = (uint16_t)(i + 1U); j < count; ++j)
+        if (i >= g_reg_table_slave_size)
         {
-            if (matched[i]->modbus_addr > matched[j]->modbus_addr)
-            {
-                tmp = matched[i];
-                matched[i] = matched[j];
-                matched[j] = tmp;
-            }
+            i = 0U;
+        }
+        entry = &g_reg_table_slave[i];
+        ++i;
+        if ((entry->access == ACCESS_INTERNAL) ||
+            (entry->access == ACCESS_WRITE) ||
+            (entry->modbus_addr != address))
+        {
+            continue;
+        }
+        total_regs = (uint16_t)(entry->size / MODBUS_REG_SIZE_BYTES);
+        if ((total_regs != 0U) &&
+            ((uint16_t)(address + total_regs) <= end_addr))
+        {
+            *cursor = i;
+            return entry;
         }
     }
+    return (const reg_table_entry_t *)0;
 }
 
 static void modbus_send_frame(uint8_t slave_addr, const uint8_t *frame, uint16_t length)
@@ -314,74 +330,51 @@ static void modbus_send_frame(uint8_t slave_addr, const uint8_t *frame, uint16_t
 
 int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_regs)
 {
-    uint16_t i;
     uint16_t end_addr;
+    uint16_t expected;
+    uint16_t cursor;
+    uint16_t first_index;
     uint8_t tx_buf[256];
     uint8_t *p;
 
     const reg_table_entry_t *entry;
-    const reg_table_entry_t *matched[MAX_MATCHED_ENTRIES];
-    uint16_t match_count = 0U;
 
     end_addr = (uint16_t)(start_addr + num_regs);
-    p = &tx_buf[0];
 
-    *p++ = slave_addr; 
-    *p++ = 0x03; 
-    *p++ = (uint8_t)(num_regs * 2U); 
-
-    for (i = 0U; i < g_reg_table_slave_size; ++i)
+    /* Validate the entire range before reading any RAM values. */
+    cursor = 0U;
+    first_index = 0U;
+    expected = start_addr;
+    while (expected != end_addr)
     {
-    	uint16_t addr;
-    	uint16_t elemsize;
-    	uint16_t total_regs;
-
-        entry = &g_reg_table_slave[i];
-        if (entry->access == ACCESS_INTERNAL)
-        {
-            continue;
-        }
-        addr = entry->modbus_addr;
-        elemsize = (uint16_t)(entry->size / entry->length);
-        total_regs = (uint16_t)(((uint32_t)elemsize * entry->length) / 2U);
-
-        if ((entry->access != ACCESS_WRITE) &&
-            (addr >= start_addr) &&
-            ((uint16_t)(addr + total_regs) <= end_addr))
-        {
-            if (match_count < MAX_MATCHED_ENTRIES)
-            {
-                matched[match_count++] = entry;
-            }
-        }
-    }
-
-    sort_entries_by_address(matched, match_count);
-
-    /* Verify full range coverage: no gaps allowed */
-    {
-        uint16_t expected = start_addr;
-        for (i = 0U; i < match_count; ++i)
-        {
-            uint16_t e_size = (uint16_t)(matched[i]->size / matched[i]->length);
-            uint16_t e_regs = (uint16_t)(((uint32_t)e_size * matched[i]->length) / 2U);
-            if (matched[i]->modbus_addr != expected)
-            {
-                return -1;
-            }
-            expected = (uint16_t)(matched[i]->modbus_addr + e_regs);
-        }
-        if (expected != end_addr)
+        entry = find_read_entry_at_address(expected, end_addr, &cursor);
+        if (entry == (const reg_table_entry_t *)0)
         {
             return -1;
         }
+        if (expected == start_addr)
+        {
+            first_index = (uint16_t)(cursor - 1U);
+        }
+        expected = (uint16_t)(expected + entry->size / MODBUS_REG_SIZE_BYTES);
     }
 
-    for (i = 0U; i < match_count; ++i)
+    p = &tx_buf[0];
+    *p++ = slave_addr;
+    *p++ = 0x03;
+    *p++ = (uint8_t)(num_regs * 2U);
+
+    cursor = first_index;
+    expected = start_addr;
+    while (expected != end_addr)
     {
-    	uint16_t j = 0;
-    	const uint8_t *src;
-        entry = matched[i];
+        uint16_t j = 0;
+        const uint8_t *src;
+        entry = find_read_entry_at_address(expected, end_addr, &cursor);
+        if (entry == (const reg_table_entry_t *)0)
+        {
+            return -1;
+        }
         src = (const uint8_t *)entry->ram_ptr;
 
         switch (entry->type)
@@ -442,6 +435,7 @@ int handle_modbus_read(uint8_t slave_addr, uint16_t start_addr, uint16_t num_reg
             default:
                 break;
         }
+        expected = (uint16_t)(expected + entry->size / MODBUS_REG_SIZE_BYTES);
     }
 
     (void)modbus_append_crc(tx_buf, (uint16_t)(p - tx_buf));

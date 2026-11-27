@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const core = require("./editor-core.cjs");
+const {readRuntime} = require("./read-test-support.cjs");
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function fixture() {
@@ -61,7 +62,7 @@ function runtime(p = fixture()) {
     ACCESS_READ: 0, ACCESS_WRITE: 1, ACCESS_READWRITE: 2, ACCESS_INTERNAL: 3,
     REG_TYPE_RESERVED: 99, MB_FALSE: 0, MODBUS_MAX_DATA_LENGTH: 250, MODBUS_REG_SIZE_BYTES: 2,
     MODBUS_EXC_ILLEGAL_DATA_VALUE: 3, MODBUS_EXC_ILLEGAL_DATA_ADDRESS: 2, MODBUS_EXC_SLAVE_DEVICE_FAILURE: 4,
-    MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY: 6, MODBUS_WRITE_OK: 0, MAX_MATCHED_ENTRIES: 125,
+    MODBUS_EXCEPTION_SLAVE_DEVICE_BUSY: 6, MODBUS_WRITE_OK: 0,
     NVM_TOTAL_SIZE: 256, NVM_OFFSET_UNUSED: 256,
     MODBUS_REG_UPDATE_SOURCE_MASTER_WRITE: 1, MODBUS_REG_UPDATE_SOURCE_INTERNAL_SET: 2,
     read_uint16: read16, read16, write16: (data, value) => data.set(bytes(value)),
@@ -78,7 +79,6 @@ function runtime(p = fixture()) {
     memcpy: (dst, src, size) => {dst.set(src.subarray(0, size)); return dst;},
     memset: (dst, value, size) => dst.fill(value, 0, size),
     memcmp: (a, b, size) => a.slice(0, size).some((v, i) => v !== b[i]) ? 1 : 0,
-    sort_entries_by_address: list => list.sort((a, b) => a.modbus_addr - b.modbus_addr),
     nvm_entry_is_valid: entry => entry.nvm_offset !== 256 ? 1 : 0,
     nvm_data_is_valid: (entry, data) => read16(data) >= read16(entry.min_value) && read16(data) <= read16(entry.max_value) ? 1 : 0
   });
@@ -98,12 +98,8 @@ function runtime(p = fixture()) {
     .replace("return (const reg_table_entry_t *)0;", "return [null, 0];");
   vm.runInContext("function find_entry_at_address(address) {" + declarations(expressions(find)) + "}", context);
   vm.runInContext("function entry_register_count(entry) {" + expressions(body(parser, "entry_register_count")) + "}", context);
-  const read = body(parser, "handle_modbus_read");
-  const start = read.indexOf("for (i = 0U; i < g_reg_table_slave_size;");
-  const end = read.lastIndexOf("for (i = 0U; i < match_count;", read.indexOf("src = (const uint8_t *)"));
-  vm.runInContext("function select_read(start_addr, num_regs) {let i, entry, matched=[], match_count=0;" +
-    "const end_addr=(start_addr+num_regs)&65535;" + declarations(expressions(read.slice(start, end))) +
-    "return matched.slice(0,match_count).map(entry=>entry.name);}", context);
+  const reads = readRuntime(parser, table);
+  context.select_read = (start, quantity) => reads.select(start, quantity);
   let write = body(parser, "handle_modbus_multi_write")
     .replaceAll("entry = find_entry_at_address(expected, &table_index);", "[entry, table_index] = find_entry_at_address(expected);")
     .replaceAll("scratch_reset(&front, &back)", "scratch_reset()")
